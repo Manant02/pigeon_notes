@@ -7,6 +7,8 @@ import ch.antoinette.pigeonnotes.data.local.db.SyncEntry
 import ch.antoinette.pigeonnotes.data.sync.SyncEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -21,6 +23,19 @@ class NotesRepository(
 ) {
     val notes: Flow<List<SyncEntry>> = dao.observeNotes()
     val pendingCount: Flow<Int> = dao.observePendingCount()
+
+    /**
+     * Category folders, sorted alphabetically: those holding notes, plus empty ones the user
+     * created. A folder holding only other files (the shared `img/` folder, say) is not a category,
+     * and neither is the archive tree or a per-note `.assets` folder.
+     */
+    val categories: Flow<List<String>> = combine(dao.observeDirs(), dao.observeFiles()) { dirs, files ->
+        val noteParents = files.filter { it.isNote }.map { it.parent }.toSet()
+        val candidates = (dirs.map { it.path } + noteParents).distinct().filter { it.isCategory() }
+        candidates
+            .filter { dir -> dir in noteParents || files.none { it.path.startsWith("$dir/") } }
+            .sortedBy { it.lowercase() }
+    }
 
     fun observe(path: String): Flow<SyncEntry?> = dao.observe(path)
 
@@ -62,6 +77,57 @@ class NotesRepository(
                 dao.upsert(e.copy(title = title, preview = preview, modified = f.lastModified(), size = f.length()))
             }
         }
+    }
+
+    /** Creates the folder for a new category and returns its path, or null if the name is taken. */
+    suspend fun createCategory(name: String): String? = withContext(Dispatchers.IO) {
+        val path = NoteText.sanitizeFileName(name)
+        if (path.isEmpty() || path.isArchive()) return@withContext null
+        if (files.exists(path) || dao.get(path) != null) return@withContext null
+        files.mkdir(path)
+        dao.upsert(SyncEntry(path, isDir = true, baseEtag = null, localState = LocalState.NEW))
+        sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
+        path
+    }
+
+    /** Renames a category folder, carrying every note and asset inside it. Returns the new path. */
+    suspend fun renameCategory(path: String, newName: String): String = withContext(Dispatchers.IO) {
+        val entry = dao.get(path) ?: return@withContext path
+        val clean = NoteText.sanitizeFileName(newName)
+        if (clean.isEmpty() || clean == path.substringAfterLast('/')) return@withContext path
+        val parent = if ('/' in path) path.substringBeforeLast('/') + "/" else ""
+        val newPath = parent + clean
+        if (files.exists(newPath) || dao.get(newPath) != null) return@withContext path
+        files.move(path, newPath)
+        rekey(path, newPath, isDir = true)
+        sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
+        newPath
+    }
+
+    /** What stopped a category from being deleted. */
+    sealed interface CategoryDeletion {
+        data object Deleted : CategoryDeletion
+        /** [remaining] are the files still in the folder, relative to it. */
+        data class NotEmpty(val remaining: List<String>) : CategoryDeletion
+    }
+
+    /**
+     * Deletes a category, but only when its folder holds nothing at all — notes, images and any
+     * other file count, so nothing is ever removed from the server unnoticed.
+     */
+    suspend fun deleteCategory(path: String): CategoryDeletion = withContext(Dispatchers.IO) {
+        val dir = files.file(path)
+        val onDisk = if (dir.isDirectory) dir.walkTopDown().filter { it.isFile }.map {
+            it.relativeTo(dir).path
+        }.toList() else emptyList()
+        val pending = dao.underPrefix("$path/").filter { it.localState != LocalState.DELETED && !it.isDir }.map { it.path.removePrefix("$path/") }
+        val remaining = (onDisk + pending).distinct().sorted()
+        if (remaining.isNotEmpty()) return@withContext CategoryDeletion.NotEmpty(remaining)
+        dao.underPrefix("$path/").forEach { markDeleted(it.path) }
+        markDeleted(path)
+        files.delete(path)
+        sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
+        CategoryDeletion.Deleted
     }
 
     /** Creates an empty note in [category] (`""` = root) with a unique name and returns its path. */
@@ -160,6 +226,11 @@ class NotesRepository(
         return File(noteDir, decoded).canonicalFile.takeIf { it.startsWith(files.root.canonicalFile) }
     }
 
+    private fun String.isArchive() = this == ARCHIVE_DIR || startsWith("$ARCHIVE_DIR/")
+
+    private fun String.isCategory() =
+        isNotEmpty() && !isArchive() && !endsWith(".assets") && !contains(".assets/")
+
     fun assetDir(notePath: String): String = notePath.removeSuffix(".md") + ".assets"
 
     private fun assetLinkPrefix(assetDirPath: String) = assetDirPath.substringAfterLast('/') + "/"
@@ -218,6 +289,9 @@ class NotesRepository(
 
     companion object {
         const val SAVE_SYNC_DELAY_MS = 1500L
+
+        /** Notes under this folder live in the archive space. */
+        const val ARCHIVE_DIR = "_archive"
 
         /** Percent-encodes the characters that would break a CommonMark link destination. */
         fun encodeLink(relPath: String): String = buildString(relPath.length + 8) {

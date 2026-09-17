@@ -59,6 +59,12 @@ interface SyncDao {
     )
     fun observeNotes(): Flow<List<SyncEntry>>
 
+    @Query("SELECT * FROM entries WHERE isDir = 1 AND localState != 'DELETED'")
+    fun observeDirs(): Flow<List<SyncEntry>>
+
+    @Query("SELECT * FROM entries WHERE isDir = 0 AND localState != 'DELETED'")
+    fun observeFiles(): Flow<List<SyncEntry>>
+
     @Query("SELECT COUNT(*) FROM entries WHERE localState != 'CLEAN'")
     fun observePendingCount(): Flow<Int>
 

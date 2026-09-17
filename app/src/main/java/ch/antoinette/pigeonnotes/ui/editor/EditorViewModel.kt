@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.antoinette.pigeonnotes.AppGraph
 import ch.antoinette.pigeonnotes.domain.NoteText
+import ch.antoinette.pigeonnotes.domain.NotesRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -25,8 +26,14 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
         private set
     var loaded by mutableStateOf(false)
         private set
-    var archived by mutableStateOf(initialPath.startsWith("_archive/"))
+    var archived by mutableStateOf(initialPath.startsWith(NotesRepository.ARCHIVE_DIR + "/"))
         private set
+
+    /** Every category, for the "move to" picker. */
+    val categories = graph.notes.categories
+
+    /** The folder the note is in right now (`""` = no category). */
+    val category: String get() = if ('/' in path) path.substringBeforeLast('/') else ""
 
     /** Whole-document field used in source mode. */
     val sourceField = TextFieldState()
@@ -90,7 +97,9 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
 
     fun rename(newTitle: String) = moveNote(newTitle = newTitle)
 
-    fun archive(archive: Boolean) = moveNote(newParent = if (archive) "_archive" else "")
+    fun archive(archive: Boolean) = moveNote(newParent = if (archive) NotesRepository.ARCHIVE_DIR else "")
+
+    fun moveToCategory(category: String) = moveNote(newParent = category)
 
     private fun moveNote(newParent: String? = null, newTitle: String? = null) {
         viewModelScope.launch {
@@ -99,7 +108,7 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
             val newPath = graph.notes.move(path, newParent, newTitle)
             path = newPath
             title = NoteText.title(newPath)
-            archived = newPath.startsWith("_archive/")
+            archived = newPath.startsWith(NotesRepository.ARCHIVE_DIR + "/")
             // links to the assets folder may have been rewritten
             val text = graph.notes.read(newPath)
             lastSaved = text

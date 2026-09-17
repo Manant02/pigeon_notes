@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -53,7 +54,9 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.antoinette.pigeonnotes.ui.graphViewModel
+import ch.antoinette.pigeonnotes.ui.notes.CategoryPickerDialog
 import ch.antoinette.pigeonnotes.ui.theme.EditorType
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,6 +68,8 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
+    val categories by vm.categories.collectAsStateWithLifecycle(emptyList())
 
     // Save when the app goes to the background.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -109,6 +114,11 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                     IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
+                            text = { Text("Move to category…") },
+                            leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null) },
+                            onClick = { menuOpen = false; moving = true },
+                        )
+                        DropdownMenuItem(
                             text = { Text(if (vm.archived) "Unarchive" else "Archive") },
                             leadingIcon = { Icon(if (vm.archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
                             onClick = { menuOpen = false; vm.archive(!vm.archived) },
@@ -148,6 +158,16 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    if (moving) {
+        CategoryPickerDialog(
+            title = "Move to",
+            categories = categories,
+            current = vm.category,
+            onDismiss = { moving = false },
+            onPick = { vm.moveToCategory(it); moving = false },
+        )
     }
 
     if (renaming) {

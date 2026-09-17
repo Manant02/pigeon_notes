@@ -155,6 +155,10 @@ class FakeSyncDao : SyncDao {
     override suspend fun underPrefix(prefix: String) = rows.value.values.filter { it.path.startsWith(prefix) }
     override fun observeNotes(): Flow<List<SyncEntry>> =
         rows.map { m -> m.values.filter { it.isNote && it.localState != LocalState.DELETED }.sortedByDescending { it.modified } }
+    override fun observeDirs(): Flow<List<SyncEntry>> =
+        rows.map { m -> m.values.filter { it.isDir && it.localState != LocalState.DELETED } }
+    override fun observeFiles(): Flow<List<SyncEntry>> =
+        rows.map { m -> m.values.filter { !it.isDir && it.localState != LocalState.DELETED } }
     override fun observePendingCount(): Flow<Int> = rows.map { m -> m.values.count { it.localState != LocalState.CLEAN } }
     override fun observeErrorCount(): Flow<Int> = rows.map { m -> m.values.count { it.syncError != null } }
     override suspend fun upsert(entry: SyncEntry) { rows.value = rows.value + (entry.path to entry) }

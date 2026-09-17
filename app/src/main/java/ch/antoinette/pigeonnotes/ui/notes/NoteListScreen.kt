@@ -1,5 +1,6 @@
 package ch.antoinette.pigeonnotes.ui.notes
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -25,11 +26,14 @@ import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
@@ -47,11 +51,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -67,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,34 +96,45 @@ fun NoteListScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var searching by remember { mutableStateOf(false) }
-    var pendingDelete by remember { mutableStateOf<NoteRow?>(null) }
-    var noteMenu by remember { mutableStateOf<NoteRow?>(null) }
+    var confirmDeletePicked by remember { mutableStateOf(false) }
+    var movingPicked by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val inArchive = state.selected == ARCHIVE_DIR
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
-            LargeTopAppBar(
-                title = {
-                    Text(
-                        when (state.selected) {
-                            null -> "Pigeon Notes"
-                            "" -> "Notes"
-                            ARCHIVE_DIR -> "Archive"
-                            else -> state.selected!!
+            if (state.picked.isNotEmpty()) {
+                SelectionTopBar(
+                    count = state.picked.size,
+                    inArchive = inArchive,
+                    onClose = vm::clearPicks,
+                    onArchive = { vm.archivePicked(!inArchive) },
+                    onDelete = { confirmDeletePicked = true },
+                    onMove = { movingPicked = true },
+                )
+            } else {
+                LargeTopAppBar(
+                    title = {
+                        Text(
+                            when (state.selected) {
+                                null -> "Pigeon Notes"
+                                "" -> "Notes"
+                                ARCHIVE_DIR -> "Archive"
+                                else -> state.selected!!
+                            }
+                        )
+                    },
+                    actions = {
+                        IconButton(onClick = { searching = !searching; if (!searching) vm.search("") }) {
+                            Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "Search")
                         }
-                    )
-                },
-                actions = {
-                    IconButton(onClick = { searching = !searching; if (!searching) vm.search("") }) {
-                        Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "Search")
-                    }
-                    SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSyncSettings)
-                    IconButton(onClick = onOpenAppSettings) { Icon(Icons.Default.Settings, "Settings") }
-                },
-                scrollBehavior = scrollBehavior,
-            )
+                        SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSyncSettings)
+                        IconButton(onClick = onOpenAppSettings) { Icon(Icons.Default.Settings, "Settings") }
+                    },
+                    scrollBehavior = scrollBehavior,
+                )
+            }
         },
         floatingActionButton = {
             if (!inArchive) {
@@ -158,17 +176,24 @@ fun NoteListScreen(
                         verticalItemSpacing = 8.dp,
                     ) {
                         items(state.rows, key = { it.path }) { row ->
-                            NoteTile(row, onClick = { onOpenNote(row.path) }, onLongClick = { noteMenu = row })
+                            NoteTile(
+                                row = row,
+                                selected = row.path in state.picked,
+                                onClick = { if (state.picked.isEmpty()) onOpenNote(row.path) else vm.togglePick(row.path) },
+                                onLongClick = { vm.togglePick(row.path) },
+                            )
                         }
                     }
                 } else {
                     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
                         items(state.rows, key = { it.path }) { row ->
                             NoteListRow(
-                                row,
-                                onClick = { onOpenNote(row.path) },
-                                onLongClick = { noteMenu = row },
-                                onDelete = { pendingDelete = row },
+                                row = row,
+                                selected = row.path in state.picked,
+                                selecting = state.picked.isNotEmpty(),
+                                onClick = { if (state.picked.isEmpty()) onOpenNote(row.path) else vm.togglePick(row.path) },
+                                onLongClick = { vm.togglePick(row.path) },
+                                onDelete = { vm.delete(row.path) },
                             )
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         }
@@ -178,37 +203,58 @@ fun NoteListScreen(
         }
     }
 
-    noteMenu?.let { row ->
+    if (confirmDeletePicked) {
+        val n = state.picked.size
         AlertDialog(
-            onDismissRequest = { noteMenu = null },
-            title = { Text(row.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            text = {
-                Column {
-                    ListItem(
-                        headlineContent = { Text(if (inArchive) "Unarchive" else "Archive") },
-                        leadingContent = { Icon(if (inArchive) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
-                        modifier = Modifier.clickable { vm.archive(row.path, !inArchive); noteMenu = null },
-                    )
-                    ListItem(
-                        headlineContent = { Text("Delete") },
-                        leadingContent = { Icon(Icons.Default.Delete, null) },
-                        modifier = Modifier.clickable { pendingDelete = row; noteMenu = null },
-                    )
-                }
-            },
-            confirmButton = { TextButton(onClick = { noteMenu = null }) { Text("Close") } },
+            onDismissRequest = { confirmDeletePicked = false },
+            title = { Text(if (n == 1) "Delete 1 note?" else "Delete $n notes?") },
+            text = { Text("The notes and their assets folders are removed here and on the server at the next sync.") },
+            confirmButton = { TextButton(onClick = { vm.deletePicked(); confirmDeletePicked = false }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDeletePicked = false }) { Text("Cancel") } },
         )
     }
 
-    pendingDelete?.let { row ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete “${row.title}”?") },
-            text = { Text("The note and its assets folder are removed here and on the server at the next sync.") },
-            confirmButton = { TextButton(onClick = { vm.delete(row.path); pendingDelete = null }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
+    if (movingPicked) {
+        CategoryPickerDialog(
+            title = if (state.picked.size == 1) "Move note to" else "Move ${state.picked.size} notes to",
+            categories = state.categories,
+            current = null,
+            onDismiss = { movingPicked = false },
+            onPick = { vm.movePicked(it); movingPicked = false },
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SelectionTopBar(
+    count: Int,
+    inArchive: Boolean,
+    onClose: () -> Unit,
+    onArchive: () -> Unit,
+    onDelete: () -> Unit,
+    onMove: () -> Unit,
+) {
+    TopAppBar(
+        title = { Text("$count selected") },
+        navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Default.Close, "Leave selection") } },
+        actions = {
+            IconButton(onClick = onArchive) {
+                Icon(
+                    if (inArchive) Icons.Outlined.Unarchive else Icons.Outlined.Archive,
+                    if (inArchive) "Unarchive" else "Archive",
+                )
+            }
+            IconButton(onClick = onMove) { Icon(Icons.Outlined.DriveFileMove, "Move to category") }
+            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete") }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            titleContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            actionIconContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            navigationIconContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+    )
 }
 
 @Composable
@@ -235,7 +281,14 @@ private fun CategoryChips(categories: List<String>, selected: Category, onSelect
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Unit, onDelete: () -> Unit) {
+private fun NoteListRow(
+    row: NoteRow,
+    selected: Boolean,
+    selecting: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val dismissState = rememberSwipeToDismissBoxState()
     LaunchedEffect(dismissState.currentValue) {
         if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
@@ -245,6 +298,8 @@ private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Un
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromStartToEnd = false,
+        gesturesEnabled = !selecting, // swiping would fight the selection
+
         backgroundContent = {
             Box(
                 Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp),
@@ -254,8 +309,18 @@ private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Un
     ) {
         ListItem(
             modifier = Modifier
-                .background(MaterialTheme.colorScheme.background)
+                .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.background)
                 .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            leadingContent = if (!selecting) null else {
+                {
+                    Icon(
+                        if (selected) Icons.Default.CheckCircle else Icons.Outlined.Circle,
+                        if (selected) "Selected" else "Not selected",
+                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    )
+                }
+            },
             headlineContent = { Text(row.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             supportingContent = {
                 if (row.preview.isNotEmpty()) Text(row.preview, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -272,10 +337,13 @@ private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Un
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteTile(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun NoteTile(row: NoteRow, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        ),
+        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
     ) {
         Column(Modifier.padding(14.dp)) {
             Text(row.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
