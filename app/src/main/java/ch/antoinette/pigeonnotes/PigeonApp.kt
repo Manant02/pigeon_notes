@@ -6,6 +6,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration
 import ch.antoinette.pigeonnotes.data.sync.SyncWorker
+import kotlinx.coroutines.launch
 
 class PigeonApp : Application(), Configuration.Provider {
 
@@ -17,6 +18,7 @@ class PigeonApp : Application(), Configuration.Provider {
         ru.noties.jlatexmath.JLatexMathAndroid.init(this)
         val graph = AppGraph.get(this)
         graph.connectivity.start()
+        graph.appScope.launch { graph.notes.reindexAll() }
         SyncWorker.schedule(this)
         // Sync whenever the app comes to the foreground.
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {

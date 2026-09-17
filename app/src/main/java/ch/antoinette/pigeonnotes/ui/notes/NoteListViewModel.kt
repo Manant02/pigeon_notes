@@ -73,14 +73,6 @@ class NoteListViewModel(private val graph: AppGraph) : ViewModel() {
     fun search(text: String) { query.value = text }
     fun refresh() = graph.syncEngine.requestSync()
 
-    fun setTileView(enabled: Boolean) {
-        viewModelScope.launch { graph.settings.setTileView(enabled) }
-    }
-
-    fun setCategoryOrder(order: List<String>) {
-        viewModelScope.launch { graph.settings.setCategoryOrder(order) }
-    }
-
     fun createNote(onCreated: (String) -> Unit) {
         val folder = selected.value ?: ""
         viewModelScope.launch { onCreated(graph.notes.create(folder)) }

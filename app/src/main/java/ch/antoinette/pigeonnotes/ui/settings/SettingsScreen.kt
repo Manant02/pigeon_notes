@@ -122,7 +122,7 @@ fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = graphViewModel { 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text("Nextcloud sync") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },

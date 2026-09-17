@@ -46,6 +46,24 @@ class NotesRepository(
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
     }
 
+    /**
+     * Recomputes the list index (title, preview, mtime) for every note from the files on disk.
+     * Cheap for a few hundred notes and keeps previews correct after the formatting rules change.
+     */
+    suspend fun reindexAll() = withContext(Dispatchers.IO) {
+        for (e in dao.all()) {
+            if (!e.isNote || e.localState == LocalState.DELETED) continue
+            val f = files.file(e.path)
+            if (!f.exists()) continue
+            val text = runCatching { f.readText() }.getOrNull() ?: continue
+            val title = NoteText.title(e.path)
+            val preview = NoteText.preview(text)
+            if (e.title != title || e.preview != preview || e.modified != f.lastModified()) {
+                dao.upsert(e.copy(title = title, preview = preview, modified = f.lastModified(), size = f.length()))
+            }
+        }
+    }
+
     /** Creates an empty note in [category] (`""` = root) with a unique name and returns its path. */
     suspend fun create(category: String, title: String = "Untitled", initialText: String = ""): String =
         withContext(Dispatchers.IO) {

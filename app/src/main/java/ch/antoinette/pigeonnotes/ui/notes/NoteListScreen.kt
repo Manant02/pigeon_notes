@@ -27,26 +27,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Unarchive
-import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -90,13 +83,12 @@ import java.time.temporal.ChronoUnit
 @Composable
 fun NoteListScreen(
     onOpenNote: (String) -> Unit,
-    onOpenSettings: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
+    onOpenAppSettings: () -> Unit,
     vm: NoteListViewModel = graphViewModel { NoteListViewModel(it) },
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var searching by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
-    var reordering by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<NoteRow?>(null) }
     var noteMenu by remember { mutableStateOf<NoteRow?>(null) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -120,24 +112,8 @@ fun NoteListScreen(
                     IconButton(onClick = { searching = !searching; if (!searching) vm.search("") }) {
                         Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "Search")
                     }
-                    SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSettings)
-                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "More") }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text(if (state.tileView) "Show as list" else "Show as tiles") },
-                            leadingIcon = { Icon(if (state.tileView) Icons.Outlined.ViewList else Icons.Outlined.GridView, null) },
-                            onClick = { vm.setTileView(!state.tileView); menuOpen = false },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Reorder categories") },
-                            onClick = { reordering = true; menuOpen = false },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Settings") },
-                            leadingIcon = { Icon(Icons.Default.Settings, null) },
-                            onClick = { menuOpen = false; onOpenSettings() },
-                        )
-                    }
+                    SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSyncSettings)
+                    IconButton(onClick = onOpenAppSettings) { Icon(Icons.Default.Settings, "Settings") }
                 },
                 scrollBehavior = scrollBehavior,
             )
@@ -166,7 +142,7 @@ fun NoteListScreen(
             }
             CategoryChips(state.categories, state.selected, vm::select)
             if (!state.configured) {
-                NotConfiguredHint(onOpenSettings)
+                NotConfiguredHint(onOpenSyncSettings)
             }
             PullToRefreshBox(
                 isRefreshing = state.status is SyncStatus.Syncing,
@@ -233,10 +209,6 @@ fun NoteListScreen(
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
         )
     }
-
-    if (reordering) {
-        ReorderCategoriesDialog(state.categories, onDismiss = { reordering = false }, onSave = { vm.setCategoryOrder(it); reordering = false })
-    }
 }
 
 @Composable
@@ -259,37 +231,6 @@ private fun CategoryChips(categories: List<String>, selected: Category, onSelect
             )
         }
     }
-}
-
-@Composable
-private fun ReorderCategoriesDialog(categories: List<String>, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
-    var order by remember { mutableStateOf(categories) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Reorder categories") },
-        text = {
-            Column {
-                order.forEachIndexed { i, c ->
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(c, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        IconButton(onClick = { order = order.swap(i, i - 1) }, enabled = i > 0) {
-                            Icon(Icons.Default.KeyboardArrowUp, "Move up")
-                        }
-                        IconButton(onClick = { order = order.swap(i, i + 1) }, enabled = i < order.lastIndex) {
-                            Icon(Icons.Default.KeyboardArrowDown, "Move down")
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = { onSave(order) }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-private fun <T> List<T>.swap(a: Int, b: Int): List<T> {
-    if (a !in indices || b !in indices) return this
-    return toMutableList().also { it[a] = this[b]; it[b] = this[a] }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
