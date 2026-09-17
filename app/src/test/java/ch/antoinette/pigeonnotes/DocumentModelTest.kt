@@ -87,6 +87,43 @@ class DocumentModelTest {
     }
 
     @Test
+    fun `backspace steps through consecutive blank lines before reaching text`() {
+        val m = model("One\n\n\n\n\nTwo\n") // three blank lines between the paragraphs
+        assertEquals(3, m.blocks.count { it.kind == BlockKind.EMPTY })
+        // Start on the last blank line.
+        m.activate(m.blocks.indexOfLast { it.kind == BlockKind.EMPTY }, 0)
+
+        m.deleteEmptyActive()
+        assertEquals("One\n\n\n\nTwo\n", m.doc)
+        assertEquals("lands on the blank line above, not on the text", BlockKind.EMPTY, m.active!!.kind)
+
+        m.deleteEmptyActive()
+        assertEquals("One\n\n\nTwo\n", m.doc)
+        assertEquals(BlockKind.EMPTY, m.active!!.kind)
+
+        // Only the last one falls through to the paragraph above.
+        m.deleteEmptyActive()
+        assertEquals("One\n\nTwo\n", m.doc)
+        assertEquals("One", m.active!!.field.text.toString())
+    }
+
+    @Test
+    fun `backspace at the end of the note eats trailing blank lines one at a time`() {
+        val m = model("One\n")
+        m.activate(0, 3)
+        m.splitActive(3)   // blank line below "One", cursor on it
+        m.splitActive(0)   // another blank line
+        assertEquals("One\n\n\n", m.doc)
+
+        m.deleteEmptyActive()
+        assertEquals("One\n\n", m.doc)
+        assertTrue("stays at the end rather than jumping into the text", m.active!!.virtual)
+
+        m.deleteEmptyActive()
+        assertEquals("One", m.active!!.field.text.toString())
+    }
+
+    @Test
     fun `emptying a block leaves a single empty line`() {
         val m = model("One\n\nTwo\n\nThree\n")
         m.type(1, "")

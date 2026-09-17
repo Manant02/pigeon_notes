@@ -206,18 +206,28 @@ class DocumentModel(initial: String = "", private val onChanged: () -> Unit = {}
         activateEmptyAt(blockEnd + 2)
     }
 
-    /** Backspace in an empty active line removes it and puts the cursor at the end of the block above. */
+    /**
+     * Backspace in an empty active line removes that line and puts the cursor on the line directly
+     * above — which may itself be another blank line, not the nearest text.
+     */
     fun deleteEmptyActive() {
         val a = active ?: return
         if (a.field.text.isNotEmpty()) return
         active = null
         when {
-            // A virtual block sits after the trailing blank lines: backspace eats the last one.
-            a.virtual -> setDoc(if (doc.endsWith("\n\n\n")) doc.dropLast(1) else doc.trimEnd('\n').let { if (it.isEmpty()) "" else it + "\n" }, notify = false)
+            a.virtual -> {
+                // The virtual line sits after the trailing blank lines: eat one and stay at the end.
+                if (doc.endsWith("\n\n\n")) {
+                    setDoc(doc.dropLast(1))
+                    openVirtualAtEnd()
+                    return
+                }
+                setDoc(doc.trimEnd('\n').let { if (it.isEmpty()) "" else it + "\n" }, notify = false)
+            }
             a.kind == BlockKind.EMPTY -> setDoc(doc.removeRange(a.start, a.start + 1))
             else -> setDoc(doc.replaceRange(a.start, minOf(a.end + 2, doc.length), "")) // block plus separator
         }
-        val idx = blocks.indexOfLast { it.start < a.start && it.kind != BlockKind.EMPTY }
+        val idx = blocks.indexOfLast { it.start < a.start }
         if (idx >= 0) activateExisting(idx, blocks[idx].source.length)
     }
 
