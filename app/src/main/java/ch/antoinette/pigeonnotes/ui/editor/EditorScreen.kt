@@ -24,6 +24,8 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -83,8 +85,8 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     }
 
     // Back: first leaves edit mode, then the screen.
-    BackHandler(enabled = vm.active != null || vm.sourceMode) {
-        if (vm.sourceMode) vm.toggleSourceMode() else vm.commit()
+    BackHandler(enabled = vm.document.active != null || vm.sourceMode) {
+        if (vm.sourceMode) vm.toggleSourceMode() else vm.document.commit()
     }
 
     Scaffold(
@@ -97,7 +99,7 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = { vm.commit(); vm.flush(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    IconButton(onClick = { vm.document.commit(); vm.flush(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
                     IconButton(onClick = { renaming = true }) { Icon(Icons.Default.Edit, "Rename") }
@@ -106,6 +108,11 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                     }
                     IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (vm.archived) "Unarchive" else "Archive") },
+                            leadingIcon = { Icon(if (vm.archived) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
+                            onClick = { menuOpen = false; vm.archive(!vm.archived) },
+                        )
                         DropdownMenuItem(
                             text = { Text("Delete note") },
                             leadingIcon = { Icon(Icons.Default.Delete, null) },
@@ -132,10 +139,10 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                     HybridEditor(vm, palette, onOpenLink = openLink)
                 }
             }
-            if (vm.active != null || vm.sourceMode) {
+            if (vm.document.active != null || vm.sourceMode) {
                 EditorToolbar(
-                    field = if (vm.sourceMode) vm.sourceField else vm.active?.field,
-                    onDone = { if (vm.sourceMode) vm.toggleSourceMode() else vm.commit() },
+                    field = if (vm.sourceMode) vm.sourceField else vm.document.active?.field,
+                    onDone = { if (vm.sourceMode) vm.toggleSourceMode() else vm.document.commit() },
                     onPickImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     modifier = Modifier.zIndex(1f).background(MaterialTheme.colorScheme.surfaceContainer).fillMaxWidth(),
                 )

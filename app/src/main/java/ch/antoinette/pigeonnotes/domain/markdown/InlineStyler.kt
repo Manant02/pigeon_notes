@@ -8,7 +8,7 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 
 /** Abstract styling instructions; the UI maps them to theme-aware SpanStyles. Keeps this layer testable. */
-enum class InlineStyle { BOLD, ITALIC, CODE, STRIKE, LINK, IMAGE_ALT, MATH, HEADING, QUOTE, BULLET, DIM, CHECKED }
+enum class InlineStyle { BOLD, ITALIC, CODE, STRIKE, LINK, IMAGE_ALT, MATH, HEADING, QUOTE, BULLET, DIM }
 
 data class StyleRange(val start: Int, val end: Int, val style: InlineStyle, val level: Int = 0)
 
@@ -22,12 +22,28 @@ data class Marker(val start: Int, val end: Int, val ownerStart: Int, val ownerEn
 
 data class LinkRange(val start: Int, val end: Int, val url: String)
 
+/** An inline `$…$` element; [latex] is the formula without delimiters. */
+data class MathRange(val start: Int, val end: Int, val latex: String)
+
+/** One list-item line: [contentStart] is where the text after bullet/checkbox begins, for hanging indents. */
+data class ListLine(val start: Int, val end: Int, val contentStart: Int)
+
+/** A `[ ]` / `[x]` token. */
+data class CheckboxRange(val start: Int, val end: Int, val checked: Boolean)
+
 class Analysis(
     val source: String,
     val styles: List<StyleRange>,
     val markers: List<Marker>,
     val links: List<LinkRange>,
+    val math: List<MathRange> = emptyList(),
+    val listLines: List<ListLine> = emptyList(),
+    val checkboxes: List<CheckboxRange> = emptyList(),
 )
+
+/** Where an element ended up in the projected text (output offsets). */
+data class MathHit(val start: Int, val end: Int, val latex: String)
+data class CheckboxHit(val start: Int, val end: Int, val sourceStart: Int, val checked: Boolean)
 
 /** Result of applying a set of markers: the visible text plus shifted styles and offset mapping. */
 class Projection(
@@ -35,6 +51,9 @@ class Projection(
     val styles: List<StyleRange>,
     val links: List<LinkRange>,
     private val applied: List<Marker>,
+    val math: List<MathHit> = emptyList(),
+    val listLines: List<ListLine> = emptyList(),
+    val checkboxes: List<CheckboxHit> = emptyList(),
 ) {
     fun toOutput(sourceOffset: Int): Int = mapToOutput(applied, sourceOffset)
     fun toSource(outputOffset: Int): Int = mapToSource(applied, outputOffset)
@@ -65,6 +84,8 @@ class Projection(
 }
 
 object InlineStyler {
+    /** Placeholder character standing in for a rendered formula in the projected text. */
+    const val MATH_PLACEHOLDER = '￼'
 
     fun analyze(source: String, kind: BlockKind, level: Int = 0): Analysis {
         val styles = ArrayList<StyleRange>()
@@ -76,14 +97,31 @@ object InlineStyler {
             return Analysis(source, styles, markers, links)
         }
         val root = BlockParser.parseTree(source)
-        Walker(source, styles, markers, links).walk(root)
+        val w = Walker(source, styles, markers, links)
+        w.walk(root)
         markers.sortBy { it.start }
-        return Analysis(source, styles, markers, links)
+        return Analysis(source, styles, markers, links, w.math, w.listLines, w.checkboxes)
     }
 
-    /** Applies every marker whose owner does not contain [cursor] (all of them when [cursor] is null). */
-    fun project(a: Analysis, cursor: Int? = null): Projection {
-        val applied = a.markers.filter { cursor == null || !it.ownerContains(cursor) }
+    /**
+     * Applies every marker whose owner does not contain [cursor] (all of them when [cursor] is null).
+     * With [renderMath], inline formulas outside the cursor collapse to [MATH_PLACEHOLDER] so the UI
+     * can draw them; the active text field cannot show images, so it leaves this off.
+     */
+    fun project(a: Analysis, cursor: Int? = null, renderMath: Boolean = false): Projection {
+        var markers = a.markers
+        val mathHits = ArrayList<Pair<Marker, String>>()
+        if (renderMath && a.math.isNotEmpty()) {
+            val collapsed = a.math.filter { cursor == null || cursor !in it.start..it.end }
+            markers = markers.filter { m -> collapsed.none { m.start >= it.start && m.end <= it.end } }
+            for (r in collapsed) {
+                val m = Marker(r.start, r.end, r.start, r.end, MATH_PLACEHOLDER.toString())
+                markers = markers + m
+                mathHits += m to r.latex
+            }
+            markers = markers.sortedBy { it.start }
+        }
+        val applied = markers.filter { cursor == null || !it.ownerContains(cursor) }
         val sb = StringBuilder(a.source.length)
         var pos = 0
         for (m in applied) {
@@ -92,17 +130,29 @@ object InlineStyler {
             pos = m.end
         }
         sb.append(a.source, pos, a.source.length)
-        val styles = a.styles.mapNotNull { s ->
-            val o1 = Projection.mapToOutput(applied, s.start)
-            val o2 = Projection.mapToOutput(applied, s.end)
-            if (o2 > o1) s.copy(start = o1, end = o2) else null
+
+        fun range(s: Int, e: Int): Pair<Int, Int>? {
+            val o1 = Projection.mapToOutput(applied, s)
+            val o2 = Projection.mapToOutput(applied, e)
+            return if (o2 > o1) o1 to o2 else null
         }
-        val links = a.links.mapNotNull { l ->
-            val o1 = Projection.mapToOutput(applied, l.start)
-            val o2 = Projection.mapToOutput(applied, l.end)
-            if (o2 > o1) l.copy(start = o1, end = o2) else null
+        val styles = a.styles.mapNotNull { s -> range(s.start, s.end)?.let { (o1, o2) -> s.copy(start = o1, end = o2) } }
+        val links = a.links.mapNotNull { l -> range(l.start, l.end)?.let { (o1, o2) -> l.copy(start = o1, end = o2) } }
+        val math = mathHits.mapNotNull { (m, latex) ->
+            if (m !in applied) null else Projection.mapToOutput(applied, m.start).let { o -> MathHit(o, o + 1, latex) }
         }
-        return Projection(sb.toString(), styles, links, applied)
+        val listLines = a.listLines.mapNotNull { l ->
+            val s = Projection.mapToOutput(applied, l.start)
+            val e = Projection.mapToOutput(applied, l.end)
+            val c = Projection.mapToOutput(applied, l.contentStart)
+            if (e > s) ListLine(s, e, c.coerceIn(s, e)) else null
+        }
+        val checkboxes = a.checkboxes.mapNotNull { c ->
+            val m = applied.firstOrNull { it.start == c.start } ?: return@mapNotNull null
+            val o = Projection.mapToOutput(applied, m.start)
+            CheckboxHit(o, o + m.replacement.length, c.start, c.checked)
+        }
+        return Projection(sb.toString(), styles, links, applied, math, listLines, checkboxes)
     }
 
     private fun fenceMarkers(source: String, markers: MutableList<Marker>) {
@@ -125,6 +175,10 @@ object InlineStyler {
         val markers: MutableList<Marker>,
         val links: MutableList<LinkRange>,
     ) {
+        val math = ArrayList<MathRange>()
+        val listLines = ArrayList<ListLine>()
+        val checkboxes = ArrayList<CheckboxRange>()
+
         fun walk(node: ASTNode) {
             val t = node.type
             when {
@@ -154,7 +208,11 @@ object InlineStyler {
                 t == MarkdownElementTypes.STRONG -> delimited(node, MarkdownTokenTypes.EMPH, InlineStyle.BOLD)
                 t == MarkdownElementTypes.EMPH -> delimited(node, MarkdownTokenTypes.EMPH, InlineStyle.ITALIC)
                 t == GFMElementTypes.STRIKETHROUGH -> delimited(node, GFMTokenTypes.TILDE, InlineStyle.STRIKE)
-                t == GFMElementTypes.INLINE_MATH -> delimited(node, GFMTokenTypes.DOLLAR, InlineStyle.MATH)
+
+                t == GFMElementTypes.INLINE_MATH -> {
+                    val inner = delimited(node, GFMTokenTypes.DOLLAR, InlineStyle.MATH)
+                    if (inner != null) math += MathRange(node.startOffset, node.endOffset, src.substring(inner.first, inner.second))
+                }
 
                 t == MarkdownElementTypes.CODE_SPAN -> {
                     val ticks = node.children.filter { it.type == MarkdownTokenTypes.BACKTICK }
@@ -216,15 +274,7 @@ object InlineStyler {
                 t == MarkdownElementTypes.CODE_BLOCK || t == MarkdownElementTypes.CODE_FENCE ->
                     styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.CODE)
 
-                t == GFMTokenTypes.CHECK_BOX -> {
-                    val checked = src.substring(node.startOffset, node.endOffset).contains('x', ignoreCase = true)
-                    val lineEnd = src.indexOf('\n', node.endOffset).let { if (it < 0) src.length else it }
-                    val lineStart = src.lastIndexOf('\n', node.startOffset - 1) + 1
-                    var hideEnd = node.endOffset
-                    while (hideEnd < src.length && src[hideEnd] == ' ') hideEnd++
-                    markers += Marker(node.startOffset, hideEnd, lineStart, lineEnd, replacement = if (checked) "☑ " else "☐ ")
-                    if (checked) styles += StyleRange(hideEnd, lineEnd, InlineStyle.CHECKED)
-                }
+                t == GFMTokenTypes.CHECK_BOX -> Unit // handled by listItem
 
                 else -> children(node)
             }
@@ -232,21 +282,24 @@ object InlineStyler {
 
         private fun children(node: ASTNode) = node.children.forEach { walk(it) }
 
-        private fun delimited(node: ASTNode, delimiter: IElementType, style: InlineStyle) {
+        /** Returns the inner (content) range when delimiters were found. */
+        private fun delimited(node: ASTNode, delimiter: IElementType, style: InlineStyle): Pair<Int, Int>? {
             val kids = node.children
             // `**` arrives as two one-char EMPH tokens, so take the whole leading/trailing run.
             val lead = kids.takeWhile { it.type == delimiter }
             val trail = kids.takeLastWhile { it.type == delimiter }
-            if (lead.isNotEmpty() && trail.isNotEmpty() && lead.size + trail.size < kids.size) {
+            return if (lead.isNotEmpty() && trail.isNotEmpty() && lead.size + trail.size < kids.size) {
                 val openEnd = lead.last().endOffset
                 val closeStart = trail.first().startOffset
                 markers += Marker(node.startOffset, openEnd, node.startOffset, node.endOffset)
                 markers += Marker(closeStart, node.endOffset, node.startOffset, node.endOffset)
                 styles += StyleRange(openEnd, closeStart, style)
                 kids.subList(lead.size, kids.size - trail.size).forEach { walk(it) }
+                openEnd to closeStart
             } else {
                 styles += StyleRange(node.startOffset, node.endOffset, style)
                 children(node)
+                null
             }
         }
 
@@ -269,16 +322,37 @@ object InlineStyler {
             if (bullet != null) {
                 val lineEnd = src.indexOf('\n', bullet.endOffset).let { if (it < 0) src.length else it }
                 val lineStart = src.lastIndexOf('\n', bullet.startOffset - 1) + 1
-                var end = bullet.endOffset
-                while (end < src.length && src[end] == ' ') end++
-                val raw = src.substring(bullet.startOffset, bullet.endOffset).trim()
-                if (bullet.type == MarkdownTokenTypes.LIST_BULLET) {
-                    markers += Marker(bullet.startOffset, end, lineStart, lineEnd, replacement = "•  ")
+                var afterBullet = bullet.endOffset
+                while (afterBullet < src.length && src[afterBullet] == ' ') afterBullet++
+                val checkbox = findCheckbox(node, afterBullet, lineEnd)
+                var contentStart = afterBullet
+                if (checkbox != null) {
+                    var afterBox = checkbox.endOffset
+                    while (afterBox < src.length && src[afterBox] == ' ') afterBox++
+                    val checked = src.substring(checkbox.startOffset, checkbox.endOffset).contains('x', ignoreCase = true)
+                    // Task items show only the box, no bullet.
+                    markers += Marker(bullet.startOffset, afterBullet, lineStart, lineEnd)
+                    markers += Marker(checkbox.startOffset, afterBox, lineStart, lineEnd, replacement = if (checked) "☑ " else "☐ ")
+                    checkboxes += CheckboxRange(checkbox.startOffset, checkbox.endOffset, checked)
+                    contentStart = afterBox
+                } else if (bullet.type == MarkdownTokenTypes.LIST_BULLET) {
+                    markers += Marker(bullet.startOffset, afterBullet, lineStart, lineEnd, replacement = "•  ")
                 } else {
+                    val raw = src.substring(bullet.startOffset, bullet.endOffset).trim()
                     styles += StyleRange(bullet.startOffset, bullet.startOffset + raw.length, InlineStyle.BULLET)
                 }
+                listLines += ListLine(lineStart, lineEnd, contentStart)
             }
             children(node)
+        }
+
+        private fun findCheckbox(node: ASTNode, from: Int, to: Int): ASTNode? {
+            if (node.type == GFMTokenTypes.CHECK_BOX) return node.takeIf { it.startOffset in from..to }
+            for (c in node.children) {
+                if (c.startOffset > to) break
+                findCheckbox(c, from, to)?.let { return it }
+            }
+            return null
         }
 
         private fun atxLevel(t: IElementType): Int = when (t) {

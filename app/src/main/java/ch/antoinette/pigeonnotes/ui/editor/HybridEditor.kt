@@ -22,11 +22,12 @@ import ch.antoinette.pigeonnotes.domain.markdown.BlockKind
  */
 @Composable
 fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (String) -> Unit, modifier: Modifier = Modifier) {
-    val blocks = vm.blocks
-    val active = vm.active
+    val doc = vm.document
+    val blocks = doc.blocks
+    val active = doc.active
     val listState = rememberLazyListState()
 
-    // Display list: blocks, with a virtual active block inserted at its index.
+    // Display list: the parsed blocks, plus a virtual paragraph after the last one while it is being typed.
     val count = blocks.size + (if (active?.virtual == true) 1 else 0)
 
     LaunchedEffect(active?.index, active?.virtual) {
@@ -39,22 +40,13 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
         state = listState,
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) { detectTapGestures { vm.activateAtEnd() } },
+            .pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } },
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 240.dp),
     ) {
-        items(count = count, key = { displayIndex ->
+        items(count = count, key = { i -> if (i < blocks.size) "${blocks[i].start}:${blocks[i].kind}" else "virtual" }) { i ->
             val a = active
-            if (a != null && a.virtual && displayIndex == a.index) "virtual"
-            else {
-                val bi = if (a != null && a.virtual && displayIndex > a.index) displayIndex - 1 else displayIndex
-                "$bi:${blocks[bi].start}"
-            }
-        }) { displayIndex ->
-            val a = active
-            val isVirtual = a != null && a.virtual && displayIndex == a.index
-            val blockIndex = if (a != null && a.virtual && displayIndex > a.index) displayIndex - 1 else displayIndex
-            val block = if (isVirtual) null else blocks[blockIndex]
-            val editing = isVirtual || (a != null && !a.virtual && a.index == blockIndex)
+            val block = blocks.getOrNull(i)
+            val editing = a != null && a.index == i
 
             Box(Modifier.fillMaxWidth().padding(vertical = spacingFor(block?.kind))) {
                 if (editing && a != null) {
@@ -62,15 +54,17 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
                         active = a,
                         palette = palette,
                         onTextChanged = vm::onTextChanged,
-                        onSplit = vm::splitActive,
-                        onLeaveList = vm::leaveListActive,
+                        onSplit = doc::splitActive,
+                        onLeaveList = doc::leaveListActive,
+                        onDeleteEmpty = doc::deleteEmptyActive,
                     )
                 } else if (block != null) {
                     RenderedBlock(
                         block = block,
                         palette = palette,
                         resolveLink = vm::resolveLink,
-                        onActivate = { offset -> vm.activate(blockIndex, offset) },
+                        onActivate = { offset -> doc.activate(i, offset) },
+                        onToggleCheckbox = { offset -> doc.toggleCheckbox(i, offset) },
                         onOpenLink = onOpenLink,
                     )
                 }
@@ -78,7 +72,7 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
         }
         item(key = "tail") {
             // Extra tap target so a short note can still be appended to comfortably.
-            Box(Modifier.fillMaxWidth().height(120.dp).pointerInput(Unit) { detectTapGestures { vm.activateAtEnd() } })
+            Box(Modifier.fillMaxWidth().height(120.dp).pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } })
         }
     }
 }
@@ -86,6 +80,6 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
 private fun spacingFor(kind: BlockKind?): androidx.compose.ui.unit.Dp = when (kind) {
     BlockKind.HEADING -> 10.dp
     BlockKind.IMAGE, BlockKind.CODE -> 8.dp
-    BlockKind.HR -> 0.dp
+    BlockKind.HR, BlockKind.EMPTY -> 0.dp
     else -> 6.dp
 }

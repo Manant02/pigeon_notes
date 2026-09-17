@@ -70,6 +70,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coil.compose)
     implementation(libs.jb.markdown)
+    implementation(libs.jlatexmath)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

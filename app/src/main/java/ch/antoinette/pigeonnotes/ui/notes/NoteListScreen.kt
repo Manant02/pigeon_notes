@@ -2,6 +2,8 @@ package ch.antoinette.pigeonnotes.ui.notes
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,23 +15,38 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -78,27 +95,58 @@ fun NoteListScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var searching by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var reordering by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<NoteRow?>(null) }
+    var noteMenu by remember { mutableStateOf<NoteRow?>(null) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val inArchive = state.selected == ARCHIVE_DIR
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             LargeTopAppBar(
-                title = { Text(state.selected?.ifEmpty { "Notes" } ?: "Pigeon Notes") },
+                title = {
+                    Text(
+                        when (state.selected) {
+                            null -> "Pigeon Notes"
+                            "" -> "Notes"
+                            ARCHIVE_DIR -> "Archive"
+                            else -> state.selected!!
+                        }
+                    )
+                },
                 actions = {
                     IconButton(onClick = { searching = !searching; if (!searching) vm.search("") }) {
                         Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "Search")
                     }
                     SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSettings)
-                    IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, "Settings") }
+                    IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "More") }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (state.tileView) "Show as list" else "Show as tiles") },
+                            leadingIcon = { Icon(if (state.tileView) Icons.Outlined.ViewList else Icons.Outlined.GridView, null) },
+                            onClick = { vm.setTileView(!state.tileView); menuOpen = false },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Reorder categories") },
+                            onClick = { reordering = true; menuOpen = false },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = { Icon(Icons.Default.Settings, null) },
+                            onClick = { menuOpen = false; onOpenSettings() },
+                        )
+                    }
                 },
                 scrollBehavior = scrollBehavior,
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { vm.createNote(onOpenNote) }) {
-                Icon(Icons.Default.Add, "New note")
+            if (!inArchive) {
+                FloatingActionButton(onClick = { vm.createNote(onOpenNote) }) {
+                    Icon(Icons.Default.Add, "New note")
+                }
             }
         },
     ) { padding ->
@@ -125,14 +173,55 @@ fun NoteListScreen(
                 onRefresh = vm::refresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
-                    items(state.rows, key = { it.path }) { row ->
-                        NoteListRow(row, onClick = { onOpenNote(row.path) }, onDelete = { pendingDelete = row })
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                if (state.tileView) {
+                    LazyVerticalStaggeredGrid(
+                        columns = StaggeredGridCells.Adaptive(160.dp),
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 96.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalItemSpacing = 8.dp,
+                    ) {
+                        items(state.rows, key = { it.path }) { row ->
+                            NoteTile(row, onClick = { onOpenNote(row.path) }, onLongClick = { noteMenu = row })
+                        }
+                    }
+                } else {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
+                        items(state.rows, key = { it.path }) { row ->
+                            NoteListRow(
+                                row,
+                                onClick = { onOpenNote(row.path) },
+                                onLongClick = { noteMenu = row },
+                                onDelete = { pendingDelete = row },
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        }
                     }
                 }
             }
         }
+    }
+
+    noteMenu?.let { row ->
+        AlertDialog(
+            onDismissRequest = { noteMenu = null },
+            title = { Text(row.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    ListItem(
+                        headlineContent = { Text(if (inArchive) "Unarchive" else "Archive") },
+                        leadingContent = { Icon(if (inArchive) Icons.Outlined.Unarchive else Icons.Outlined.Archive, null) },
+                        modifier = Modifier.clickable { vm.archive(row.path, !inArchive); noteMenu = null },
+                    )
+                    ListItem(
+                        headlineContent = { Text("Delete") },
+                        leadingContent = { Icon(Icons.Default.Delete, null) },
+                        modifier = Modifier.clickable { pendingDelete = row; noteMenu = null },
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { noteMenu = null }) { Text("Close") } },
+        )
     }
 
     pendingDelete?.let { row ->
@@ -143,6 +232,10 @@ fun NoteListScreen(
             confirmButton = { TextButton(onClick = { vm.delete(row.path); pendingDelete = null }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
         )
+    }
+
+    if (reordering) {
+        ReorderCategoriesDialog(state.categories, onDismiss = { reordering = false }, onSave = { vm.setCategoryOrder(it); reordering = false })
     }
 }
 
@@ -157,12 +250,51 @@ private fun CategoryChips(categories: List<String>, selected: Category, onSelect
         items(categories) { c ->
             FilterChip(selected = selected == c, onClick = { onSelect(c) }, label = { Text(c) })
         }
+        item {
+            FilterChip(
+                selected = selected == ARCHIVE_DIR,
+                onClick = { onSelect(ARCHIVE_DIR) },
+                label = { Text("Archive") },
+                leadingIcon = { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)) },
+            )
+        }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun ReorderCategoriesDialog(categories: List<String>, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
+    var order by remember { mutableStateOf(categories) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Reorder categories") },
+        text = {
+            Column {
+                order.forEachIndexed { i, c ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(c, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        IconButton(onClick = { order = order.swap(i, i - 1) }, enabled = i > 0) {
+                            Icon(Icons.Default.KeyboardArrowUp, "Move up")
+                        }
+                        IconButton(onClick = { order = order.swap(i, i + 1) }, enabled = i < order.lastIndex) {
+                            Icon(Icons.Default.KeyboardArrowDown, "Move down")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(order) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun <T> List<T>.swap(a: Int, b: Int): List<T> {
+    if (a !in indices || b !in indices) return this
+    return toMutableList().also { it[a] = this[b]; it[b] = this[a] }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Unit, onDelete: () -> Unit) {
     val dismissState = rememberSwipeToDismissBoxState()
     LaunchedEffect(dismissState.currentValue) {
         if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
@@ -180,7 +312,9 @@ private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onDelete: () -> Unit)
         },
     ) {
         ListItem(
-            modifier = Modifier.background(MaterialTheme.colorScheme.background).clickable(onClick = onClick),
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.background)
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick),
             headlineContent = { Text(row.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             supportingContent = {
                 if (row.preview.isNotEmpty()) Text(row.preview, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -188,16 +322,45 @@ private fun NoteListRow(row: NoteRow, onClick: () -> Unit, onDelete: () -> Unit)
             trailingContent = {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(relativeTime(row.modified), style = MaterialTheme.typography.labelSmall)
-                    if (row.error != null) {
-                        Spacer(Modifier.height(4.dp))
-                        Icon(Icons.Outlined.ErrorOutline, "Sync error", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                    } else if (row.pending) {
-                        Spacer(Modifier.height(6.dp))
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.tertiary))
-                    }
+                    StatusDot(row)
                 }
             },
         )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun NoteTile(row: NoteRow, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text(row.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (row.preview.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    row.preview, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 8, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(relativeTime(row.modified), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                StatusDot(row)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusDot(row: NoteRow) {
+    if (row.error != null) {
+        Icon(Icons.Outlined.ErrorOutline, "Sync error", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+    } else if (row.pending) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.tertiary))
     }
 }
 

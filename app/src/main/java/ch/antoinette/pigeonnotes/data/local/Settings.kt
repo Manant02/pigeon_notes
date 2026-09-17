@@ -3,6 +3,7 @@ package ch.antoinette.pigeonnotes.data.local
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -38,6 +39,24 @@ class Settings(private val context: Context) : AccountSource {
         val appPassword = stringPreferencesKey("app_password")
         val notesRoot = stringPreferencesKey("notes_root")
         val lastSync = longPreferencesKey("last_sync")
+        val tileView = booleanPreferencesKey("tile_view")
+        val categoryOrder = stringPreferencesKey("category_order")
+    }
+
+    /** Show the note list as Keep-style tiles instead of rows. */
+    val tileView: Flow<Boolean> = context.dataStore.data.map { it[Keys.tileView] ?: false }
+
+    /** User-chosen order of category chips; categories not listed follow alphabetically. */
+    val categoryOrder: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.categoryOrder]?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
+    }
+
+    suspend fun setTileView(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.tileView] = enabled }
+    }
+
+    suspend fun setCategoryOrder(order: List<String>) {
+        context.dataStore.edit { it[Keys.categoryOrder] = order.joinToString("\u0000") }
     }
 
     val account: Flow<Account?> = context.dataStore.data.map { it.toAccount() }

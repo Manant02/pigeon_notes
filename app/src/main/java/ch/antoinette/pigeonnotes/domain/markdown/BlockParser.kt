@@ -7,7 +7,15 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.parser.MarkdownParser
 
-enum class BlockKind { PARAGRAPH, HEADING, LIST, CODE, QUOTE, TABLE, HR, HTML, FRONTMATTER, IMAGE, MATH }
+enum class BlockKind {
+    PARAGRAPH, HEADING, LIST, CODE, QUOTE, TABLE, HR, HTML, FRONTMATTER, IMAGE, MATH,
+
+    /**
+     * A blank line beyond the single one that separates blocks (or before the first block). It has a
+     * zero-length range at the start of that line; typing into it splices `text + "\n"` there.
+     */
+    EMPTY,
+}
 
 /** A top-level editing unit of the document: [start, end) in the full text, never including trailing newlines. */
 data class Block(
@@ -32,15 +40,35 @@ object BlockParser {
             contentStart = end
         }
         val root = parser.buildMarkdownTreeFromString(doc)
+        // After front matter the gap is measured from its closing newline, like after any other block.
+        var prevEnd = if (contentStart > 0) contentStart - 1 else 0
+        var first = contentStart == 0
         for (node in root.children) {
             if (node.startOffset < contentStart) continue
             val kind = kindOf(node, doc) ?: continue
             var end = node.endOffset
             while (end > node.startOffset && (doc[end - 1] == '\n' || doc[end - 1] == ' ')) end--
             if (end <= node.startOffset) continue
+            blocks += emptyLines(doc, prevEnd, node.startOffset, leading = first)
             blocks += Block(kind, node.startOffset, end, doc.substring(node.startOffset, end), headingLevel(node))
+            prevEnd = end
+            first = false
         }
+        // Blank lines after the last block are just as visible as the ones between blocks.
+        blocks += emptyLines(doc, prevEnd, doc.length, leading = first)
         return blocks
+    }
+
+    /**
+     * EMPTY blocks for the blank lines in the gap [from, to). One newline ends the previous block and
+     * one more is the normal separator; every further newline is an empty line the user can see and edit.
+     */
+    private fun emptyLines(doc: String, from: Int, to: Int, leading: Boolean): List<Block> {
+        val newlines = (from until to).filter { doc[it] == '\n' }
+        val skip = if (leading) 0 else 2
+        if (newlines.size <= skip) return emptyList()
+        // Each extra newline terminates an empty line that starts at that same offset.
+        return newlines.drop(skip).map { nl -> Block(BlockKind.EMPTY, nl, nl, "") }
     }
 
     /** Full parse of a single block's source, for inline styling. */

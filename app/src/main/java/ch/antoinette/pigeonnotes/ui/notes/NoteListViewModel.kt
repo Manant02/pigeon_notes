@@ -13,7 +13,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** `null` = all notes; `""` = root folder; otherwise a folder path. */
+/** Notes under this folder live in the archive space, not in "All". */
+const val ARCHIVE_DIR = "_archive"
+
+/** `null` = all notes; `""` = root folder; [ARCHIVE_DIR] = archive; otherwise a folder path. */
 typealias Category = String?
 
 data class NoteRow(val path: String, val title: String, val preview: String, val modified: Long, val pending: Boolean, val error: String?)
@@ -26,6 +29,7 @@ data class NoteListUiState(
     val status: SyncStatus = SyncStatus.Idle,
     val pendingCount: Int = 0,
     val configured: Boolean = true,
+    val tileView: Boolean = false,
 )
 
 class NoteListViewModel(private val graph: AppGraph) : ViewModel() {
@@ -33,7 +37,8 @@ class NoteListViewModel(private val graph: AppGraph) : ViewModel() {
     private val query = MutableStateFlow("")
 
     val state: StateFlow<NoteListUiState> = combine(
-        graph.notes.notes, selected, query, graph.syncEngine.status, graph.notes.pendingCount, graph.settings.account,
+        graph.notes.notes, selected, query, graph.syncEngine.status, graph.notes.pendingCount,
+        graph.settings.account, graph.settings.tileView, graph.settings.categoryOrder,
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val notes = values[0] as List<SyncEntry>
@@ -42,24 +47,50 @@ class NoteListViewModel(private val graph: AppGraph) : ViewModel() {
         val status = values[3] as SyncStatus
         val pending = values[4] as Int
         val configured = values[5] != null
-        val categories = notes.map { it.parent }.filter { it.isNotEmpty() }.distinct().sortedBy { it.lowercase() }
+        val tiles = values[6] as Boolean
+        @Suppress("UNCHECKED_CAST")
+        val order = values[7] as List<String>
+
+        val present = notes.map { it.parent }.filter { it.isNotEmpty() && !it.isArchive() }.distinct()
+        val categories = order.filter { it in present } + present.filter { it !in order }.sortedBy { it.lowercase() }
         val rows = notes.asSequence()
-            .filter { cat == null || it.parent == cat }
+            .filter {
+                when (cat) {
+                    null -> !it.parent.isArchive()
+                    ARCHIVE_DIR -> it.parent.isArchive()
+                    else -> it.parent == cat
+                }
+            }
             .filter { q.isEmpty() || it.title.contains(q, true) || it.preview.contains(q, true) }
             .map { NoteRow(it.path, it.title, it.preview, it.modified, it.localState != LocalState.CLEAN, it.syncError) }
             .toList()
-        NoteListUiState(rows, categories, cat, q, status, pending, configured)
+        NoteListUiState(rows, categories, cat, q, status, pending, configured, tiles)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NoteListUiState())
+
+    private fun String.isArchive() = this == ARCHIVE_DIR || startsWith("$ARCHIVE_DIR/")
 
     fun select(category: Category) { selected.value = category }
     fun search(text: String) { query.value = text }
     fun refresh() = graph.syncEngine.requestSync()
 
+    fun setTileView(enabled: Boolean) {
+        viewModelScope.launch { graph.settings.setTileView(enabled) }
+    }
+
+    fun setCategoryOrder(order: List<String>) {
+        viewModelScope.launch { graph.settings.setCategoryOrder(order) }
+    }
+
     fun createNote(onCreated: (String) -> Unit) {
-        viewModelScope.launch { onCreated(graph.notes.create(selected.value ?: "")) }
+        val folder = selected.value ?: ""
+        viewModelScope.launch { onCreated(graph.notes.create(folder)) }
     }
 
     fun delete(path: String) {
         viewModelScope.launch { graph.notes.delete(path) }
+    }
+
+    fun archive(path: String, archived: Boolean) {
+        viewModelScope.launch { graph.notes.move(path, newParent = if (archived) ARCHIVE_DIR else "") }
     }
 }

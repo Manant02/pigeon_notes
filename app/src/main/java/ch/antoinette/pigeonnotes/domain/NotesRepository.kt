@@ -62,11 +62,19 @@ class NotesRepository(
         }
 
     /** Renames a note (and its assets folder, rewriting the links inside). Returns the new path. */
-    suspend fun rename(path: String, newTitle: String): String = withContext(Dispatchers.IO) {
+    suspend fun rename(path: String, newTitle: String): String = move(path, newTitle = newTitle)
+
+    /**
+     * Moves a note to [newParent] (`""` = root, null = keep) and/or gives it [newTitle] (null = keep),
+     * carrying its assets folder along and rewriting the links inside. Returns the new path.
+     */
+    suspend fun move(path: String, newParent: String? = null, newTitle: String? = null): String = withContext(Dispatchers.IO) {
         val entry = dao.get(path) ?: return@withContext path
-        val clean = NoteText.sanitizeFileName(newTitle)
-        if (clean == NoteText.title(path)) return@withContext path
-        val newPath = uniquePath(entry.parent, clean, ".md")
+        val parent = newParent ?: entry.parent
+        val clean = newTitle?.let { NoteText.sanitizeFileName(it) } ?: NoteText.title(path)
+        if (parent == entry.parent && clean == NoteText.title(path)) return@withContext path
+        ensureDir(parent)
+        val newPath = uniquePath(parent, clean, ".md")
 
         val oldAssets = assetDir(path)
         val newAssets = assetDir(newPath)

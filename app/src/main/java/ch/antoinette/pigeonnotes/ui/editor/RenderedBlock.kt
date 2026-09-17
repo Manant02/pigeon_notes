@@ -5,8 +5,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import ch.antoinette.pigeonnotes.domain.markdown.Analysis
@@ -38,7 +39,7 @@ import java.io.File
 
 /**
  * A block in reading mode. Tapping anywhere activates it with the cursor at the tapped character;
- * long-pressing a link opens it.
+ * tapping a checkbox toggles it; long-pressing a link opens it.
  */
 @Composable
 fun RenderedBlock(
@@ -46,12 +47,19 @@ fun RenderedBlock(
     palette: MarkdownPalette,
     resolveLink: (String) -> File?,
     onActivate: (sourceOffset: Int) -> Unit,
+    onToggleCheckbox: (sourceOffset: Int) -> Unit,
     onOpenLink: (String) -> Unit,
 ) {
     val analysis = remember(block.source, block.kind) { InlineStyler.analyze(block.source, block.kind, block.level) }
-    val projection = remember(analysis) { InlineStyler.project(analysis) }
+    val projection = remember(analysis) { InlineStyler.project(analysis, renderMath = true) }
 
     when (block.kind) {
+        BlockKind.EMPTY -> {
+            // One empty line, same height as a body line, so whitespace looks like it does in the file.
+            val lineHeight = with(LocalDensity.current) { blockTextStyle(BlockKind.PARAGRAPH, 0, palette).lineHeight.toDp() }
+            Box(Modifier.fillMaxWidth().height(lineHeight).pointerInput(Unit) { detectTapGestures { onActivate(0) } })
+        }
+
         BlockKind.HR -> HorizontalDivider(
             Modifier.padding(vertical = 12.dp).pointerInput(Unit) { detectTapGestures { onActivate(0) } },
             color = MaterialTheme.colorScheme.outlineVariant,
@@ -65,6 +73,11 @@ fun RenderedBlock(
 
         BlockKind.IMAGE -> ImageBlock(block, analysis, resolveLink, onActivate)
 
+        BlockKind.MATH -> DisplayMath(
+            block.source,
+            Modifier.pointerInput(Unit) { detectTapGestures { onActivate(block.source.length) } },
+        )
+
         BlockKind.CODE -> Box(
             Modifier
                 .fillMaxWidth()
@@ -72,7 +85,7 @@ fun RenderedBlock(
                 .background(palette.codeBackground)
                 .padding(12.dp),
         ) {
-            StyledText(block, projection, palette, onActivate, onOpenLink)
+            StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
         }
 
         BlockKind.QUOTE -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
@@ -83,10 +96,10 @@ fun RenderedBlock(
                     .fillMaxHeight()
                     .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp)),
             )
-            StyledText(block, projection, palette, onActivate, onOpenLink)
+            StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
         }
 
-        else -> StyledText(block, projection, palette, onActivate, onOpenLink)
+        else -> StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
     }
 }
 
@@ -96,21 +109,29 @@ private fun StyledText(
     projection: Projection,
     palette: MarkdownPalette,
     onActivate: (Int) -> Unit,
+    onToggleCheckbox: (Int) -> Unit,
     onOpenLink: (String) -> Unit,
 ) {
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val annotated = remember(projection, palette) { palette.annotate(projection) }
-    fun outputOffset(pos: Offset): Int = layout?.getOffsetForPosition(pos) ?: projection.text.length
+    val style = blockTextStyle(block.kind, block.level, palette)
+    val annotated = remember(projection, palette, style) { palette.annotate(projection, style) }
+    fun outputOffset(pos: Offset): Int =
+        layout?.let { annotated.toOutput(it.getOffsetForPosition(pos)) } ?: projection.text.length
 
     Text(
-        text = annotated,
-        style = blockTextStyle(block.kind, block.level, palette),
+        text = annotated.text,
+        inlineContent = annotated.inlineContent,
+        style = style,
         onTextLayout = { layout = it },
         modifier = Modifier
             .fillMaxWidth()
             .pointerInput(projection) {
                 detectTapGestures(
-                    onTap = { pos -> onActivate(projection.toSource(outputOffset(pos))) },
+                    onTap = { pos ->
+                        val off = outputOffset(pos)
+                        val box = projection.checkboxes.firstOrNull { off in it.start..it.end }
+                        if (box != null) onToggleCheckbox(box.sourceStart) else onActivate(projection.toSource(off))
+                    },
                     onLongPress = { pos ->
                         val off = outputOffset(pos)
                         val link = projection.links.firstOrNull { off in it.start..it.end }

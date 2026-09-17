@@ -28,6 +28,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import ch.antoinette.pigeonnotes.domain.markdown.Analysis
@@ -45,6 +50,7 @@ fun ActiveBlockField(
     onTextChanged: () -> Unit,
     onSplit: (cursor: Int) -> Unit,
     onLeaveList: (lineStart: Int, lineEnd: Int) -> Unit,
+    onDeleteEmpty: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
     val output = remember(active, palette) { MarkdownOutputTransformation(active.kind, active.level, palette) }
@@ -58,7 +64,16 @@ fun ActiveBlockField(
     val field: @Composable () -> Unit = {
         BasicTextField(
             state = active.field,
-            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focus)
+                .onPreviewKeyEvent { e ->
+                    // Backspace in an empty line removes the line (Typora); IMEs that only send
+                    // deleteSurroundingText never reach here, which is harmless.
+                    if (e.type == KeyEventType.KeyDown && e.key == Key.Backspace && active.field.text.isEmpty()) {
+                        onDeleteEmpty(); true
+                    } else false
+                },
             textStyle = blockTextStyle(active.kind, active.level, palette),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             lineLimits = TextFieldLineLimits.MultiLine(),
@@ -137,7 +152,7 @@ class EnterTransformation(
         if (range.length != 1 || charAt(range.start) != '\n') return
         val newlineAt = range.start
         when (kind) {
-            BlockKind.PARAGRAPH, BlockKind.HEADING, BlockKind.IMAGE -> {
+            BlockKind.PARAGRAPH, BlockKind.HEADING, BlockKind.IMAGE, BlockKind.EMPTY -> {
                 val cursor = changes.getOriginalRange(0).start
                 revertAllChanges()
                 onSplit(cursor)

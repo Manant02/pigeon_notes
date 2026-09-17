@@ -242,7 +242,10 @@ class SyncEngine(
 
         private suspend fun download(path: String, etag: String?) {
             _status.value = SyncStatus.Syncing("Downloading $path")
-            val newEtag = dav.download(path, files.file(path)) ?: etag
+            val f = files.file(path)
+            val newEtag = dav.download(path, f) ?: etag
+            // Keep the server's modification time so the list shows when the note was edited, not synced.
+            remote[path]?.modified?.takeIf { it > 0 }?.let { f.setLastModified(it) }
             stats.downloaded++
             save(indexed(SyncEntry(path, isDir = false, baseEtag = newEtag, localState = LocalState.CLEAN)))
         }
@@ -280,6 +283,7 @@ class SyncEngine(
             val conflictPath = conflictName(path)
             if (localFile.exists()) files.move(path, conflictPath)
             tmp.renameTo(localFile)
+            remote[path]?.modified?.takeIf { it > 0 }?.let { localFile.setLastModified(it) }
             save(indexed(SyncEntry(path, isDir = false, baseEtag = newEtag, localState = LocalState.CLEAN)))
             val copy = indexed(SyncEntry(conflictPath, isDir = false, baseEtag = null, localState = LocalState.NEW))
             save(copy)

@@ -18,7 +18,10 @@ object NoteText {
         val cleaned = line
             .replace(Regex("""[*_`~]+"""), "")
             .replace(Regex("""\[([^\]]*)\]\([^)]*\)"""), "$1")
-            .removePrefix("- ").removePrefix("* ").removePrefix("> ")
+            .replace(Regex("""^\s*([-*+]|\d+[.)])\s+"""), "")   // bullet
+            .replace(Regex("""^\[[ xX]\]\s*"""), "")           // task marker
+            .removePrefix("> ")
+            .trim()
         return if (cleaned.length > maxChars) cleaned.take(maxChars - 1) + "…" else cleaned
     }
 

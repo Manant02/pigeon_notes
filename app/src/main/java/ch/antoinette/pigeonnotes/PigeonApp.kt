@@ -14,6 +14,7 @@ class PigeonApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        ru.noties.jlatexmath.JLatexMathAndroid.init(this)
         val graph = AppGraph.get(this)
         graph.connectivity.start()
         SyncWorker.schedule(this)

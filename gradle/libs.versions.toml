@@ -15,6 +15,7 @@ browser = "1.10.0"
 okhttp = "5.5.0"
 coil = "3.6.2"
 jbMarkdown = "0.7.14"
+jlatexmath = "0.2.0"
 junit = "4.13.2"
 
 [libraries]
@@ -47,6 +48,7 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver3", version.ref = "okhttp" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 jb-markdown = { group = "org.jetbrains", name = "markdown", version.ref = "jbMarkdown" }
+jlatexmath = { group = "ru.noties", name = "jlatexmath-android", version.ref = "jlatexmath" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
