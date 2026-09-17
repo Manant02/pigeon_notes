@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple pigeon silhouette holding a note, drawn within the 108dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:translateX="54" android:translateY="54" android:scaleX="0.62" android:scaleY="0.62">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M-30,-4 C-30,-22 -14,-30 0,-30 C12,-30 22,-24 26,-16 L38,-18 L30,-8 C32,4 26,18 12,24 L14,32 L6,26 L-4,26 L-6,32 L-10,24 C-24,20 -30,10 -30,-4 Z" />
+        <path
+            android:fillColor="#4A6B8A"
+            android:pathData="M12,-18 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+        <path
+            android:fillColor="#F2C14E"
+            android:pathData="M26,-16 L38,-18 L30,-10 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:strokeColor="#4A6B8A"
+            android:strokeWidth="2"
+            android:pathData="M-22,2 L2,2 L2,22 L-22,22 Z" />
+        <path
+            android:strokeColor="#4A6B8A"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:pathData="M-17,8 L-3,8 M-17,13 L-3,13 M-17,18 L-9,18" />
+    </group>
+</vector>
