@@ -33,13 +33,27 @@ class LoginFlowV2(private val http: OkHttpClient) {
         }
     }
 
-    /** Polls until the browser login completes. Cancel the coroutine to abort. */
-    suspend fun awaitCredentials(started: Started, intervalMillis: Long = 2000): Credentials {
-        while (true) {
-            val creds = pollOnce(started)
-            if (creds != null) return creds
+    /**
+     * Polls until the browser login completes. Cancel the coroutine to abort. Transient network
+     * errors (e.g. a DNS blip while Tailscale reconnects) are retried until [timeoutMillis]; the
+     * server keeps the token valid for 20 minutes.
+     */
+    suspend fun awaitCredentials(
+        started: Started,
+        intervalMillis: Long = 2000,
+        timeoutMillis: Long = 15 * 60 * 1000,
+    ): Credentials {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        var lastError: IOException? = null
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                pollOnce(started)?.let { return it }
+            } catch (e: IOException) {
+                lastError = e
+            }
             delay(intervalMillis)
         }
+        throw IOException("Login timed out" + (lastError?.let { ": ${it.message}" } ?: ""))
     }
 
     private suspend fun pollOnce(started: Started): Credentials? = withContext(Dispatchers.IO) {
