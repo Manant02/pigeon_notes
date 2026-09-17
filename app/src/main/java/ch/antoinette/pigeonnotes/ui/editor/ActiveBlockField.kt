@@ -95,7 +95,7 @@ fun ActiveBlockField(
                 .padding(12.dp),
         ) { field() }
 
-        BlockKind.QUOTE -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+        BlockKind.QUOTE, BlockKind.ALERT -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             Box(
                 Modifier
                     .padding(end = 12.dp)
@@ -128,8 +128,9 @@ class MarkdownOutputTransformation(
             if (cursor != null && m.ownerContains(cursor)) continue
             if (m.replacement.isEmpty()) delete(m.start, m.end) else replace(m.start, m.end, m.replacement)
         }
+        val base = blockTextStyle(kind, level, palette)
         for (s in projection.styles) {
-            val style = palette.spanStyle(s) ?: continue
+            val style = palette.spanStyle(s, base) ?: continue
             val a = s.start.coerceIn(0, length); val b = s.end.coerceIn(0, length)
             if (b > a) addStyle(style, a, b)
         }
@@ -175,7 +176,7 @@ class EnterTransformation(
                 placeCursorAfterCharAt(newlineAt + prefix.length)
             }
 
-            BlockKind.QUOTE -> {
+            BlockKind.QUOTE, BlockKind.ALERT -> {
                 insert(newlineAt + 1, "> ")
                 placeCursorAfterCharAt(newlineAt + 2)
             }

@@ -8,7 +8,7 @@ import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.parser.MarkdownParser
 
 enum class BlockKind {
-    PARAGRAPH, HEADING, LIST, CODE, QUOTE, TABLE, HR, HTML, FRONTMATTER, IMAGE, MATH,
+    PARAGRAPH, HEADING, LIST, CODE, QUOTE, TABLE, HR, HTML, FRONTMATTER, IMAGE, MATH, ALERT,
 
     /**
      * A blank line beyond the single one that separates blocks (or before the first block). It has a
@@ -87,7 +87,7 @@ object BlockParser {
         MarkdownTokenTypes.HORIZONTAL_RULE -> BlockKind.HR
         GFMElementTypes.TABLE -> BlockKind.TABLE
         GFMElementTypes.BLOCK_MATH -> BlockKind.MATH
-        GFMElementTypes.ALERT -> BlockKind.QUOTE
+        GFMElementTypes.ALERT -> BlockKind.ALERT
         MarkdownTokenTypes.EOL, MarkdownTokenTypes.WHITE_SPACE -> null
         else -> BlockKind.PARAGRAPH
     }

@@ -18,6 +18,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextIndent
@@ -43,13 +44,15 @@ class MarkdownPalette(
     val codeBackground: Color,
     val muted: Color,
     val bullet: Color,
+    val highlight: Color,
+    val onHighlight: Color,
     val density: Density,
     /** Width of [prefix] laid out in [style], in sp — used for hanging indents. */
     private val measure: (prefix: String, style: TextStyle) -> TextUnit,
 ) {
     private val widths = HashMap<String, TextUnit>()
 
-    fun spanStyle(s: StyleRange): SpanStyle? = when (s.style) {
+    fun spanStyle(s: StyleRange, style: TextStyle = EditorType.body): SpanStyle? = when (s.style) {
         InlineStyle.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
         InlineStyle.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
         InlineStyle.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough, color = muted)
@@ -60,6 +63,9 @@ class MarkdownPalette(
         InlineStyle.QUOTE -> SpanStyle(color = muted, fontStyle = FontStyle.Italic)
         InlineStyle.BULLET -> SpanStyle(color = bullet, fontWeight = FontWeight.Medium)
         InlineStyle.DIM -> SpanStyle(color = muted)
+        InlineStyle.SUBSCRIPT -> SpanStyle(baselineShift = BaselineShift.Subscript, fontSize = style.fontSize * 0.75f)
+        InlineStyle.SUPERSCRIPT -> SpanStyle(baselineShift = BaselineShift.Superscript, fontSize = style.fontSize * 0.75f)
+        InlineStyle.HIGHLIGHT -> SpanStyle(background = highlight, color = onHighlight)
         InlineStyle.HEADING -> null // block-level: applied through the base TextStyle
     }
 
@@ -125,7 +131,7 @@ class MarkdownPalette(
             }
             b.pop()
             for (s in p.styles) {
-                val span = spanStyle(s) ?: continue
+                val span = spanStyle(s, style) ?: continue
                 val a = s.start.coerceIn(from, to) - from
                 val z = s.end.coerceIn(from, to) - from
                 if (z > a) b.addStyle(span, a, z)
@@ -176,7 +182,7 @@ class MarkdownPalette(
             return (o - n).coerceIn(0, b.length)
         }
         for (s in p.styles) {
-            val span = spanStyle(s) ?: continue
+            val span = spanStyle(s, style) ?: continue
             val (a, z) = disp(s.start) to disp(s.end)
             if (z > a) b.addStyle(span, a, z)
         }
@@ -201,6 +207,8 @@ fun rememberMarkdownPalette(): MarkdownPalette {
             codeBackground = c.surfaceContainerHigh,
             muted = c.onSurfaceVariant,
             bullet = c.primary,
+            highlight = c.tertiaryContainer,
+            onHighlight = c.onTertiaryContainer,
             density = density,
             measure = { prefix, style -> with(density) { measurer.measure(prefix, style).size.width.toSp() } },
         )

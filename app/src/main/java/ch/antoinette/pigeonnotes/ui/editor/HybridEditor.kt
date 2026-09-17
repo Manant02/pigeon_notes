@@ -79,7 +79,7 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
 
 private fun spacingFor(kind: BlockKind?): androidx.compose.ui.unit.Dp = when (kind) {
     BlockKind.HEADING -> 10.dp
-    BlockKind.IMAGE, BlockKind.CODE -> 8.dp
+    BlockKind.IMAGE, BlockKind.CODE, BlockKind.ALERT -> 8.dp
     BlockKind.HR, BlockKind.EMPTY -> 0.dp
     else -> 6.dp
 }

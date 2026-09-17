@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -92,6 +96,8 @@ fun RenderedBlock(
 
         BlockKind.LIST -> ListBlockText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
 
+        BlockKind.ALERT -> AlertBlock(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
+
         BlockKind.QUOTE -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             Box(
                 Modifier
@@ -104,6 +110,41 @@ fun RenderedBlock(
         }
 
         else -> StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
+    }
+}
+
+/** A GitHub-style alert: accent bar, icon and title, then the quoted body. */
+@Composable
+private fun AlertBlock(
+    block: Block,
+    projection: Projection,
+    palette: MarkdownPalette,
+    onActivate: (Int) -> Unit,
+    onToggleCheckbox: (Int) -> Unit,
+    onOpenLink: (String) -> Unit,
+) {
+    val kind = remember(block.source) { AlertKind.of(block.source) }
+    val accent = kind.accent()
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+        Box(
+            Modifier
+                .padding(end = 12.dp)
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(accent, RoundedCornerShape(2.dp)),
+        )
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.pointerInput(Unit) { detectTapGestures { onActivate(0) } },
+            ) {
+                Icon(kind.icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(kind.label, style = MaterialTheme.typography.labelLarge, color = accent)
+            }
+            Spacer(Modifier.height(2.dp))
+            StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
+        }
     }
 }
 

@@ -8,7 +8,7 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 
 /** Abstract styling instructions; the UI maps them to theme-aware SpanStyles. Keeps this layer testable. */
-enum class InlineStyle { BOLD, ITALIC, CODE, STRIKE, LINK, IMAGE_ALT, MATH, HEADING, QUOTE, BULLET, DIM }
+enum class InlineStyle { BOLD, ITALIC, CODE, STRIKE, LINK, IMAGE_ALT, MATH, HEADING, QUOTE, BULLET, DIM, SUBSCRIPT, SUPERSCRIPT, HIGHLIGHT }
 
 data class StyleRange(val start: Int, val end: Int, val style: InlineStyle, val level: Int = 0)
 
@@ -99,6 +99,7 @@ object InlineStyler {
         val root = BlockParser.parseTree(source)
         val w = Walker(source, styles, markers, links)
         w.walk(root)
+        scanExtras(source, w.protectedSpans, styles, markers)
         markers.sortBy { it.start }
         return Analysis(source, styles, markers, links, w.math, w.listLines, w.checkboxes)
     }
@@ -155,6 +156,35 @@ object InlineStyler {
         return Projection(sb.toString(), styles, links, applied, math, listLines, checkboxes)
     }
 
+    // Typora-style inline syntax the CommonMark/GFM parser does not know about. Scanned over the
+    // plain text only: anything inside code, math, URLs or existing markers is left alone.
+    private val HIGHLIGHT = Regex("""==([^=\n]+)==""")
+    private val SUPERSCRIPT = Regex("""\^([^\s^]+)\^""")
+    private val SUBSCRIPT = Regex("""(?<!~)~([^\s~]+)~(?!~)""") // a single tilde, never part of ~~strike~~
+
+    private fun scanExtras(
+        src: String,
+        protectedSpans: List<IntRange>,
+        styles: MutableList<StyleRange>,
+        markers: MutableList<Marker>,
+    ) {
+        fun overlapsProtected(s: Int, e: Int) = protectedSpans.any { s < it.last + 1 && e > it.first }
+        fun apply(re: Regex, style: InlineStyle, markLength: Int) {
+            for (m in re.findAll(src)) {
+                val s = m.range.first
+                val e = m.range.last + 1
+                if (overlapsProtected(s, e)) continue
+                if (markers.any { it.start < e && it.end > s }) continue // real syntax already claims it
+                markers += Marker(s, s + markLength, s, e)
+                markers += Marker(e - markLength, e, s, e)
+                styles += StyleRange(s + markLength, e - markLength, style)
+            }
+        }
+        apply(HIGHLIGHT, InlineStyle.HIGHLIGHT, 2)
+        apply(SUPERSCRIPT, InlineStyle.SUPERSCRIPT, 1)
+        apply(SUBSCRIPT, InlineStyle.SUBSCRIPT, 1)
+    }
+
     private fun fenceMarkers(source: String, markers: MutableList<Marker>) {
         val firstEol = source.indexOf('\n')
         if (!source.startsWith("```") && !source.startsWith("~~~")) return
@@ -178,6 +208,13 @@ object InlineStyler {
         val math = ArrayList<MathRange>()
         val listLines = ArrayList<ListLine>()
         val checkboxes = ArrayList<CheckboxRange>()
+
+        /** Ranges where `~`, `^` and `=` are literal: code, math, URLs, raw HTML. */
+        val protectedSpans = ArrayList<IntRange>()
+
+        private fun protect(node: ASTNode) {
+            protectedSpans += node.startOffset until node.endOffset
+        }
 
         fun walk(node: ASTNode) {
             val t = node.type
@@ -210,11 +247,13 @@ object InlineStyler {
                 t == GFMElementTypes.STRIKETHROUGH -> delimited(node, GFMTokenTypes.TILDE, InlineStyle.STRIKE)
 
                 t == GFMElementTypes.INLINE_MATH -> {
+                    protect(node)
                     val inner = delimited(node, GFMTokenTypes.DOLLAR, InlineStyle.MATH)
                     if (inner != null) math += MathRange(node.startOffset, node.endOffset, src.substring(inner.first, inner.second))
                 }
 
                 t == MarkdownElementTypes.CODE_SPAN -> {
+                    protect(node)
                     val ticks = node.children.filter { it.type == MarkdownTokenTypes.BACKTICK }
                     val open = ticks.firstOrNull(); val close = ticks.lastOrNull()
                     if (open != null && close != null && open !== close) {
@@ -241,6 +280,7 @@ object InlineStyler {
                 }
 
                 t == MarkdownElementTypes.AUTOLINK -> {
+                    protect(node)
                     val lt = node.children.firstOrNull { it.type == MarkdownTokenTypes.LT }
                     val gt = node.children.lastOrNull { it.type == MarkdownTokenTypes.GT }
                     if (lt != null && gt != null) {
@@ -252,15 +292,34 @@ object InlineStyler {
                 }
 
                 t == GFMTokenTypes.GFM_AUTOLINK -> {
+                    protect(node)
                     styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.LINK)
                     links += LinkRange(node.startOffset, node.endOffset, src.substring(node.startOffset, node.endOffset))
                 }
 
                 t == MarkdownElementTypes.LIST_ITEM -> listItem(node)
 
-                t == MarkdownElementTypes.BLOCK_QUOTE || t == GFMElementTypes.ALERT -> {
+                t == MarkdownElementTypes.BLOCK_QUOTE -> {
                     styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.QUOTE)
                     children(node)
+                }
+
+                // The alert's colour and icon are drawn around the block; the body stays plain.
+                t == GFMElementTypes.ALERT -> {
+                    // The quote marker opening the body line arrives as whitespace, not as a quote token.
+                    for (c in node.children) {
+                        if (c.type == MarkdownTokenTypes.WHITE_SPACE && src.substring(c.startOffset, c.endOffset).contains('>')) {
+                            markers += Marker(c.startOffset, c.endOffset, 0, src.length)
+                        }
+                    }
+                    children(node)
+                }
+
+                t == GFMTokenTypes.ALERT_TITLE -> {
+                    var hideEnd = node.endOffset
+                    while (hideEnd < src.length && src[hideEnd] != '\n') hideEnd++
+                    if (hideEnd < src.length) hideEnd++ // the line break too
+                    markers += Marker(node.startOffset, hideEnd, 0, src.length)
                 }
 
                 t == MarkdownTokenTypes.BLOCK_QUOTE -> {
@@ -269,10 +328,15 @@ object InlineStyler {
                     markers += Marker(node.startOffset, hideEnd, 0, src.length)
                 }
 
-                t == MarkdownTokenTypes.HTML_TAG -> styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.DIM)
+                t == MarkdownTokenTypes.HTML_TAG -> {
+                    protect(node)
+                    styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.DIM)
+                }
 
-                t == MarkdownElementTypes.CODE_BLOCK || t == MarkdownElementTypes.CODE_FENCE ->
+                t == MarkdownElementTypes.CODE_BLOCK || t == MarkdownElementTypes.CODE_FENCE -> {
+                    protect(node)
                     styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.CODE)
+                }
 
                 t == GFMTokenTypes.CHECK_BOX -> Unit // handled by listItem
 
@@ -312,6 +376,7 @@ object InlineStyler {
             markers += Marker(node.startOffset, text.startOffset + 1, ownerStart, ownerEnd)
             markers += Marker(text.endOffset - 1, node.endOffset, ownerStart, ownerEnd)
             styles += StyleRange(text.startOffset + 1, text.endOffset - 1, InlineStyle.LINK)
+            dest?.let { protect(it) }
             val url = dest?.let { src.substring(it.startOffset, it.endOffset).trim('<', '>') } ?: ""
             links += LinkRange(node.startOffset, node.endOffset, url)
             text.children.forEach { if (it.type != MarkdownTokenTypes.LBRACKET && it.type != MarkdownTokenTypes.RBRACKET) walk(it) }
