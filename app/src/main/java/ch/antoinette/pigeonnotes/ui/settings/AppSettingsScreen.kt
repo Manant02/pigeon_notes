@@ -23,6 +23,18 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material3.Switch
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,6 +63,8 @@ import androidx.lifecycle.viewModelScope
 import ch.antoinette.pigeonnotes.AppGraph
 import ch.antoinette.pigeonnotes.ui.graphViewModel
 import ch.antoinette.pigeonnotes.domain.NotesRepository
+import ch.antoinette.pigeonnotes.ui.notes.CategoryAccent
+import ch.antoinette.pigeonnotes.ui.notes.color
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -64,6 +78,9 @@ class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
     val categories: Flow<List<String>> = combine(graph.notes.categories, graph.settings.categoryOrder) { all, order ->
         order.filter { it in all } + all.filter { it !in order }
     }
+
+    val pinned: Flow<List<String>> = graph.settings.pinnedCategories
+    val colors: Flow<Map<String, String>> = graph.settings.categoryColors
 
     /** Set when a category could not be deleted because files are still in its folder. */
     val notEmpty = MutableStateFlow<Pair<String, List<String>>?>(null)
@@ -83,20 +100,27 @@ class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
     fun renameCategory(path: String, newName: String) {
         viewModelScope.launch {
             val newPath = graph.notes.renameCategory(path, newName)
-            // keep the manual chip order pointing at the renamed folder
-            val order = graph.settings.categoryOrder.first()
-            if (path in order) graph.settings.setCategoryOrder(order.map { if (it == path) newPath else it })
+            // order, pin and colour follow the folder to its new name
+            if (newPath != path) graph.settings.renameCategoryRefs(path, newPath)
         }
+    }
+
+    fun setPinned(category: String, pin: Boolean) {
+        viewModelScope.launch {
+            val current = graph.settings.pinnedCategories.first()
+            graph.settings.setPinnedCategories(if (pin) (current - category) + category else current - category)
+        }
+    }
+
+    fun setColor(category: String, accent: CategoryAccent) {
+        viewModelScope.launch { graph.settings.setCategoryColor(category, accent.name) }
     }
 
     fun deleteCategory(path: String) {
         viewModelScope.launch {
             when (val result = graph.notes.deleteCategory(path)) {
                 is NotesRepository.CategoryDeletion.NotEmpty -> notEmpty.value = path to result.remaining
-                NotesRepository.CategoryDeletion.Deleted -> {
-                    val order = graph.settings.categoryOrder.first()
-                    if (path in order) graph.settings.setCategoryOrder(order - path)
-                }
+                NotesRepository.CategoryDeletion.Deleted -> graph.settings.renameCategoryRefs(path, null)
             }
         }
     }
@@ -105,7 +129,7 @@ class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
 }
 
 /** App preferences (not the server connection, which lives in [SettingsScreen]). */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AppSettingsScreen(
     onBack: () -> Unit,
@@ -118,6 +142,9 @@ fun AppSettingsScreen(
     var creating by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf<String?>(null) }
+    val pinned by vm.pinned.collectAsStateWithLifecycle(emptyList())
+    val colors by vm.colors.collectAsStateWithLifecycle(emptyMap())
 
     Scaffold(
         topBar = {
@@ -174,15 +201,18 @@ fun AppSettingsScreen(
                 modifier = Modifier.padding(start = 16.dp, top = 16.dp),
             )
             for (c in categories) {
+                val accent = CategoryAccent.of(colors[c])
                 ListItem(
                     headlineContent = { Text(c) },
-                    leadingContent = { Icon(Icons.Outlined.Folder, null) },
-                    trailingContent = {
-                        Row {
-                            IconButton(onClick = { renaming = c }) { Icon(Icons.Outlined.Edit, "Rename $c") }
-                            IconButton(onClick = { confirmDelete = c }) { Icon(Icons.Outlined.Delete, "Delete $c") }
-                        }
+                    supportingContent = {
+                        Text(listOfNotNull(accent.label.takeIf { accent != CategoryAccent.DEFAULT }, "Pinned".takeIf { c in pinned })
+                            .joinToString(" · ").ifEmpty { "Tap to edit" })
                     },
+                    leadingContent = { Icon(Icons.Outlined.Folder, null, tint = accent.color()) },
+                    trailingContent = {
+                        if (c in pinned) Icon(Icons.Outlined.PushPin, "Pinned", tint = accent.color())
+                    },
+                    modifier = Modifier.clickable { editing = c },
                 )
             }
             ListItem(
@@ -191,6 +221,19 @@ fun AppSettingsScreen(
                 modifier = Modifier.clickable { creating = true },
             )
         }
+    }
+
+    editing?.let { category ->
+        CategoryDetailDialog(
+            category = category,
+            accent = CategoryAccent.of(colors[category]),
+            pinned = category in pinned,
+            onAccent = { vm.setColor(category, it) },
+            onPinned = { vm.setPinned(category, it) },
+            onRename = { editing = null; renaming = category },
+            onDelete = { editing = null; confirmDelete = category },
+            onDismiss = { editing = null },
+        )
     }
 
     if (creating) {
@@ -255,6 +298,73 @@ fun AppSettingsScreen(
             onSave = { vm.setCategoryOrder(it); reordering = false },
         )
     }
+}
+
+/** Colour, pinning, rename and delete for one category. */
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun CategoryDetailDialog(
+    category: String,
+    accent: CategoryAccent,
+    pinned: Boolean,
+    onAccent: (CategoryAccent) -> Unit,
+    onPinned: (Boolean) -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(category) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Colour", style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    for (option in CategoryAccent.entries) {
+                        val color = option.color()
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(color)
+                                .border(
+                                    width = if (option == accent) 3.dp else 0.dp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    shape = CircleShape,
+                                )
+                                .clickable { onAccent(option) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (option == accent) {
+                                Icon(Icons.Outlined.Check, option.label, tint = MaterialTheme.colorScheme.surface, modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.PushPin, null)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Pin to home", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Show this category and its latest notes on the start screen",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = pinned, onCheckedChange = onPinned)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    TextButton(onClick = onRename) { Text("Rename") }
+                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 /** Asks for a category name and refuses duplicates before anything is created. */

@@ -41,6 +41,8 @@ class Settings(private val context: Context) : AccountSource {
         val lastSync = longPreferencesKey("last_sync")
         val tileView = booleanPreferencesKey("tile_view")
         val categoryOrder = stringPreferencesKey("category_order")
+        val pinnedCategories = stringPreferencesKey("pinned_categories")
+        val categoryColors = stringPreferencesKey("category_colors")
     }
 
     /** Show the note list as Keep-style tiles instead of rows. */
@@ -57,6 +59,54 @@ class Settings(private val context: Context) : AccountSource {
 
     suspend fun setCategoryOrder(order: List<String>) {
         context.dataStore.edit { it[Keys.categoryOrder] = order.joinToString("\u0000") }
+    }
+
+    /** Categories shown as their own section on the home screen, in order. */
+    val pinnedCategories: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.pinnedCategories]?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
+    }
+
+    /** Accent colour per category, as the name of a [ch.antoinette.pigeonnotes.ui.notes.CategoryAccent]. */
+    val categoryColors: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.categoryColors]?.split('\u0000').orEmpty()
+            .mapNotNull { entry ->
+                val i = entry.indexOf('\u0001')
+                if (i <= 0) null else entry.substring(0, i) to entry.substring(i + 1)
+            }
+            .toMap()
+    }
+
+    suspend fun setPinnedCategories(pinned: List<String>) {
+        context.dataStore.edit { it[Keys.pinnedCategories] = pinned.joinToString("\u0000") }
+    }
+
+    suspend fun setCategoryColor(category: String, accent: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.categoryColors]?.split('\u0000').orEmpty()
+                .filter { it.isNotEmpty() && !it.startsWith(category + '\u0001') }
+            prefs[Keys.categoryColors] = (current + (category + '\u0001' + accent)).joinToString("\u0000")
+        }
+    }
+
+    /** Keeps the per-category settings pointing at a folder that was renamed, or drops a deleted one. */
+    suspend fun renameCategoryRefs(from: String, to: String?) {
+        context.dataStore.edit { prefs ->
+            fun rewrite(list: List<String>) = list.mapNotNull { if (it == from) to else it }
+            prefs[Keys.categoryOrder] = rewrite(prefs[Keys.categoryOrder]?.split('\u0000').orEmpty().filter { it.isNotEmpty() }).joinToString("\u0000")
+            prefs[Keys.pinnedCategories] = rewrite(prefs[Keys.pinnedCategories]?.split('\u0000').orEmpty().filter { it.isNotEmpty() }).joinToString("\u0000")
+            prefs[Keys.categoryColors] = prefs[Keys.categoryColors]?.split('\u0000').orEmpty()
+                .filter { it.isNotEmpty() }
+                .mapNotNull { entry ->
+                    val i = entry.indexOf('\u0001')
+                    val name = if (i > 0) entry.substring(0, i) else entry
+                    when {
+                        name != from -> entry
+                        to == null -> null
+                        else -> to + entry.substring(i)
+                    }
+                }
+                .joinToString("\u0000")
+        }
     }
 
     val account: Flow<Account?> = context.dataStore.data.map { it.toAccount() }

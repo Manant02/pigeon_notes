@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -89,13 +90,16 @@ import java.time.temporal.ChronoUnit
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NoteListScreen(
+    category: Category,
+    startSearching: Boolean = false,
+    onBack: () -> Unit,
     onOpenNote: (String) -> Unit,
     onOpenSyncSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
-    vm: NoteListViewModel = graphViewModel { NoteListViewModel(it) },
+    vm: NoteListViewModel = graphViewModel(key = "list:$category") { NoteListViewModel(it, category) },
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
-    var searching by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(startSearching) }
     var confirmDeletePicked by remember { mutableStateOf(false) }
     var movingPicked by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -118,12 +122,15 @@ fun NoteListScreen(
                     title = {
                         Text(
                             when (state.selected) {
-                                null -> "Pigeon Notes"
-                                "" -> "Notes"
+                                null -> "All notes"
+                                "" -> "Uncategorized"
                                 ARCHIVE_DIR -> "Archive"
                                 else -> state.selected!!
                             }
                         )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
                     actions = {
                         IconButton(onClick = { searching = !searching; if (!searching) vm.search("") }) {
@@ -374,7 +381,7 @@ private fun StatusDot(row: NoteRow) {
 }
 
 @Composable
-private fun SyncStatusIcon(status: SyncStatus, pending: Int, onClick: () -> Unit) {
+fun SyncStatusIcon(status: SyncStatus, pending: Int, onClick: () -> Unit) {
     val (icon, desc) = when (status) {
         is SyncStatus.Syncing -> Icons.Outlined.Sync to "Syncing"
         SyncStatus.Offline -> Icons.Outlined.CloudOff to "Offline"

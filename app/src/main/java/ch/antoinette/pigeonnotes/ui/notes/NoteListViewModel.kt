@@ -35,8 +35,8 @@ data class NoteListUiState(
     val picked: Set<String> = emptySet(),
 )
 
-class NoteListViewModel(private val graph: AppGraph) : ViewModel() {
-    private val selected = MutableStateFlow<Category>(null)
+class NoteListViewModel(private val graph: AppGraph, initial: Category) : ViewModel() {
+    private val selected = MutableStateFlow(initial)
     private val query = MutableStateFlow("")
 
     private val picked = MutableStateFlow<Set<String>>(emptySet())
