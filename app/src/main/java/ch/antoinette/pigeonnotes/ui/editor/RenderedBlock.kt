@@ -3,6 +3,7 @@ package ch.antoinette.pigeonnotes.ui.editor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -17,6 +18,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +90,8 @@ fun RenderedBlock(
             StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
         }
 
+        BlockKind.LIST -> ListBlockText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
+
         BlockKind.QUOTE -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             Box(
                 Modifier
@@ -100,6 +104,58 @@ fun RenderedBlock(
         }
 
         else -> StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
+    }
+}
+
+/**
+ * A list block: one Text per item, so the spacing between items ([ListItemGap]) can be larger than
+ * the line spacing inside an item, and the hanging indent applies to the item as a whole.
+ */
+@Composable
+private fun ListBlockText(
+    block: Block,
+    projection: Projection,
+    palette: MarkdownPalette,
+    onActivate: (Int) -> Unit,
+    onToggleCheckbox: (Int) -> Unit,
+    onOpenLink: (String) -> Unit,
+) {
+    val style = blockTextStyle(block.kind, block.level, palette)
+    val items = remember(projection, palette, style) { palette.annotateListItems(projection, style) }
+    if (items.isEmpty()) {
+        StyledText(block, projection, palette, onActivate, onToggleCheckbox, onOpenLink)
+        return
+    }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ListItemGap)) {
+        for (item in items) {
+            key(item.outputStart) {
+                var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+                fun outputOffset(pos: Offset): Int =
+                    item.outputStart + (layout?.getOffsetForPosition(pos) ?: 0)
+                Text(
+                    text = item.text,
+                    inlineContent = item.inlineContent,
+                    style = style,
+                    onTextLayout = { layout = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .pointerInput(item) {
+                            detectTapGestures(
+                                onTap = { pos ->
+                                    val off = outputOffset(pos)
+                                    val box = projection.checkboxes.firstOrNull { off in it.start..it.end }
+                                    if (box != null) onToggleCheckbox(box.sourceStart) else onActivate(projection.toSource(off))
+                                },
+                                onLongPress = { pos ->
+                                    val off = outputOffset(pos)
+                                    val link = projection.links.firstOrNull { off in it.start..it.end }
+                                    if (link != null) onOpenLink(link.url) else onActivate(projection.toSource(off))
+                                },
+                            )
+                        },
+                )
+            }
+        }
     }
 }
 

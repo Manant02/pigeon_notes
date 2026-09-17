@@ -23,10 +23,12 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ch.antoinette.pigeonnotes.domain.markdown.BlockKind
 import ch.antoinette.pigeonnotes.domain.markdown.InlineStyle
 import ch.antoinette.pigeonnotes.domain.markdown.ListLine
+import ch.antoinette.pigeonnotes.domain.markdown.MathHit
 import ch.antoinette.pigeonnotes.domain.markdown.Projection
 import ch.antoinette.pigeonnotes.domain.markdown.StyleRange
 import ch.antoinette.pigeonnotes.ui.theme.EditorType
@@ -61,12 +63,75 @@ class MarkdownPalette(
         InlineStyle.HEADING -> null // block-level: applied through the base TextStyle
     }
 
+    /** Width of a list item's bullet/checkbox prefix, so wrapped lines can hang under the text. */
+    fun indentWidth(prefix: String, style: TextStyle): TextUnit =
+        widths.getOrPut(prefix + "|" + style.fontSize.value) { measure(prefix, style) }
+
     /** Wrapped lines of a list item continue under the text, not under the bullet. */
     fun hangingIndent(line: ListLine, text: String, style: TextStyle): ParagraphStyle? {
         val prefix = text.substring(line.start, line.contentStart.coerceIn(line.start, line.end))
         if (prefix.isEmpty()) return null
-        val width = widths.getOrPut(prefix + "|" + style.fontSize.value) { measure(prefix, style) }
-        return ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = width))
+        return ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = indentWidth(prefix, style)))
+    }
+
+    /** Inline content for one formula: the rendered bitmap, or its source when TeX rejects it. */
+    private fun mathContent(hit: MathHit, style: TextStyle): InlineTextContent {
+        val sizePx = with(density) { style.fontSize.toPx() }
+        val rendered = Latex.render(hit.latex, sizePx, text)
+        if (rendered != null) {
+            val w = with(density) { rendered.widthPx.toSp() }
+            val h = with(density) { rendered.heightPx.toSp() }
+            return InlineTextContent(Placeholder(w, h, PlaceholderVerticalAlign.TextCenter)) {
+                Image(rendered.bitmap, contentDescription = hit.latex)
+            }
+        }
+        val src = "$" + hit.latex + "$"
+        val w = measure(src, style.copy(fontFamily = FontFamily.Monospace))
+        return InlineTextContent(Placeholder(w, style.lineHeight, PlaceholderVerticalAlign.TextCenter)) {
+            Text(src, style = style.copy(fontFamily = FontFamily.Monospace, color = muted), maxLines = 1)
+        }
+    }
+
+    /**
+     * One list item, rendered as its own Text so the spacing between items can differ from the
+     * spacing between the wrapped lines inside an item. [outputStart] maps a tap back to [Projection].
+     */
+    class ListItemText(val outputStart: Int, val text: AnnotatedString, val inlineContent: Map<String, InlineTextContent>)
+
+    /** Splits a list block into items (a bullet line plus its continuation lines). */
+    fun annotateListItems(p: Projection, style: TextStyle): List<ListItemText> {
+        val starts = p.listLines.map { it.start }
+        if (starts.isEmpty()) return emptyList()
+        val mathAt = p.math.associateBy { it.start }
+        return p.listLines.mapIndexed { idx, line ->
+            val from = line.start
+            var to = if (idx + 1 < starts.size) starts[idx + 1] else p.text.length
+            while (to > from && p.text[to - 1] == '\n') to--  // the separator is the gap between items
+            val inline = HashMap<String, InlineTextContent>()
+            val b = AnnotatedString.Builder(to - from + 8)
+            val prefix = p.text.substring(from, line.contentStart.coerceIn(from, to))
+            b.pushStyle(ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = indentWidth(prefix, style))))
+            var i = from
+            while (i < to) {
+                val hit = mathAt[i]
+                if (hit != null && hit.end <= to) {
+                    val id = "math$i"
+                    inline[id] = mathContent(hit, style)
+                    b.appendInlineContent(id, p.text.substring(i, i + 1)) // one char, so offsets stay put
+                    i = hit.end
+                } else {
+                    b.append(p.text[i]); i++
+                }
+            }
+            b.pop()
+            for (s in p.styles) {
+                val span = spanStyle(s) ?: continue
+                val a = s.start.coerceIn(from, to) - from
+                val z = s.end.coerceIn(from, to) - from
+                if (z > a) b.addStyle(span, a, z)
+            }
+            ListItemText(from, b.toAnnotatedString(), inline)
+        }
     }
 
     /**
@@ -97,22 +162,7 @@ class MarkdownPalette(
             val hit = mathAt[i]
             if (hit != null) {
                 val id = "math$i"
-                val sizePx = with(density) { style.fontSize.toPx() }
-                val rendered = Latex.render(hit.latex, sizePx, text)
-                if (rendered != null) {
-                    val w = with(density) { rendered.widthPx.toSp() }
-                    val h = with(density) { rendered.heightPx.toSp() }
-                    inline[id] = InlineTextContent(Placeholder(w, h, PlaceholderVerticalAlign.TextCenter)) {
-                        Image(rendered.bitmap, contentDescription = hit.latex)
-                    }
-                } else {
-                    // TeX rejected it: show the source inline, still occupying one placeholder char.
-                    val src = "$" + hit.latex + "$"
-                    val w = measure(src, style.copy(fontFamily = FontFamily.Monospace))
-                    inline[id] = InlineTextContent(Placeholder(w, style.lineHeight, PlaceholderVerticalAlign.TextCenter)) {
-                        Text(src, style = style.copy(fontFamily = FontFamily.Monospace, color = muted), maxLines = 1)
-                    }
-                }
+                inline[id] = mathContent(hit, style)
                 b.appendInlineContent(id, p.text.substring(i, i + 1))
                 i = hit.end
                 continue
@@ -158,8 +208,12 @@ fun rememberMarkdownPalette(): MarkdownPalette {
 }
 
 /** Base text style for a block so the rendered and the editable version line up exactly. */
+/** Vertical gap between two list items; must exceed the line spacing inside an item. */
+val ListItemGap = 7.dp
+
 fun blockTextStyle(kind: BlockKind, level: Int, palette: MarkdownPalette): TextStyle = when (kind) {
     BlockKind.HEADING -> EditorType.heading(level)
+    BlockKind.LIST -> EditorType.list
     BlockKind.CODE, BlockKind.TABLE, BlockKind.HTML, BlockKind.MATH, BlockKind.FRONTMATTER -> EditorType.code
     else -> EditorType.body
 }.copy(color = palette.text)
