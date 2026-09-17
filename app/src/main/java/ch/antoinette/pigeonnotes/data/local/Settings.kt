@@ -25,7 +25,13 @@ data class Account(
         get() = serverUrl.trimEnd('/') + "/remote.php/dav/files/" + loginName + "/" + notesRoot.trim('/')
 }
 
-class Settings(private val context: Context) {
+/** What the sync engine needs from settings; an interface so tests can supply a fixed account. */
+interface AccountSource {
+    suspend fun currentAccount(): Account?
+    suspend fun markSynced(at: Long = System.currentTimeMillis())
+}
+
+class Settings(private val context: Context) : AccountSource {
     private object Keys {
         val serverUrl = stringPreferencesKey("server_url")
         val loginName = stringPreferencesKey("login_name")
@@ -37,7 +43,7 @@ class Settings(private val context: Context) {
     val account: Flow<Account?> = context.dataStore.data.map { it.toAccount() }
     val lastSync: Flow<Long?> = context.dataStore.data.map { it[Keys.lastSync] }
 
-    suspend fun currentAccount(): Account? = context.dataStore.data.first().toAccount()
+    override suspend fun currentAccount(): Account? = context.dataStore.data.first().toAccount()
 
     suspend fun saveAccount(serverUrl: String, loginName: String, appPassword: String, notesRoot: String = "/Notes") {
         context.dataStore.edit {
@@ -54,7 +60,7 @@ class Settings(private val context: Context) {
         }
     }
 
-    suspend fun markSynced(at: Long = System.currentTimeMillis()) {
+    override suspend fun markSynced(at: Long) {
         context.dataStore.edit { it[Keys.lastSync] = at }
     }
 

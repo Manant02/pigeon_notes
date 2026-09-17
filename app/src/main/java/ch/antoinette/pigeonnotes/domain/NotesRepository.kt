@@ -70,7 +70,8 @@ class NotesRepository(
 
         val oldAssets = assetDir(path)
         val newAssets = assetDir(newPath)
-        var text = files.read(path)
+        val original = files.read(path)
+        var text = original
         if (files.exists(oldAssets)) {
             val (oldPrefix, newPrefix) = assetLinkPrefix(oldAssets) to assetLinkPrefix(newAssets)
             text = text
@@ -79,9 +80,10 @@ class NotesRepository(
             files.move(oldAssets, newAssets)
             rekey(oldAssets, newAssets, isDir = true)
         }
-        files.write(path, text)
+        if (text != original) files.write(path, text)
         files.move(path, newPath)
-        rekey(path, newPath, isDir = false)
+        // A MOVE would carry the server's old content, so a rewritten note is uploaded fresh instead.
+        rekey(path, newPath, isDir = false, allowMove = text == original)
         val moved = dao.get(newPath)!!
         dao.upsert(moved.copy(title = NoteText.title(newPath), preview = NoteText.preview(text), modified = files.file(newPath).lastModified()))
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
@@ -165,7 +167,7 @@ class NotesRepository(
      * Re-keys bookkeeping after a local move. A CLEAN source becomes a MOVE for the engine
      * (`movedFrom`); a MODIFIED or NEW source is simply re-created at the new path.
      */
-    private suspend fun rekey(from: String, to: String, isDir: Boolean) {
+    private suspend fun rekey(from: String, to: String, isDir: Boolean, allowMove: Boolean = true) {
         val old = dao.get(from)
         val children = if (isDir) dao.underPrefix("$from/") else emptyList()
         for (c in children) {
@@ -177,7 +179,7 @@ class NotesRepository(
         if (old == null) {
             dao.upsert(SyncEntry(to, isDir = isDir, baseEtag = null, localState = LocalState.NEW)); return
         }
-        val canMove = old.localState == LocalState.CLEAN && old.baseEtag != null
+        val canMove = allowMove && old.localState == LocalState.CLEAN && old.baseEtag != null
         dao.upsert(
             old.copy(
                 path = to, localState = LocalState.NEW, baseEtag = null, syncError = null,

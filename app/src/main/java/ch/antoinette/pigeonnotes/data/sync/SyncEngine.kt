@@ -2,7 +2,7 @@ package ch.antoinette.pigeonnotes.data.sync
 
 import android.util.Log
 import ch.antoinette.pigeonnotes.data.local.FileStore
-import ch.antoinette.pigeonnotes.data.local.Settings
+import ch.antoinette.pigeonnotes.data.local.AccountSource
 import ch.antoinette.pigeonnotes.data.local.db.LocalState
 import ch.antoinette.pigeonnotes.data.local.db.SyncDao
 import ch.antoinette.pigeonnotes.data.local.db.SyncEntry
@@ -41,7 +41,7 @@ sealed interface SyncStatus {
  * directories are assumed unchanged remotely, so local changes there still get pushed.
  */
 class SyncEngine(
-    private val settings: Settings,
+    private val settings: AccountSource,
     private val dao: SyncDao,
     private val files: FileStore,
     private val http: OkHttpClient,
@@ -103,7 +103,7 @@ class SyncEngine(
         } catch (e: Exception) {
             _status.value = SyncStatus.Error(e.message ?: e.javaClass.simpleName)
             log("error: ${e.message}")
-            Log.e(TAG, "sync failed", e)
+            runCatching { Log.e(TAG, "sync failed", e) }
         }
     }
 
@@ -363,7 +363,7 @@ class SyncEngine(
     }
 
     private fun log(line: String) {
-        Log.d(TAG, line)
+        runCatching { Log.d(TAG, line) } // android.util.Log is a stub in JVM unit tests
         val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
         _log.update { (listOf("$stamp $line") + it).take(200) }
     }

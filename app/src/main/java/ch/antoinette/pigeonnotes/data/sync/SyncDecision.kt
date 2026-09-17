@@ -71,8 +71,8 @@ object SyncDecision {
             }
 
             LocalState.NEW -> when {
-                isDir -> if (remoteEtag == null) Action.CreateRemoteDir else Action.None
                 movedFrom != null && remoteEtag == null -> Action.MoveRemote(movedFrom)
+                isDir -> if (remoteEtag == null) Action.CreateRemoteDir else Action.None
                 remoteEtag == null -> Action.Upload(ifMatch = null, ifNoneMatch = true)
                 else -> Action.Conflict
             }
