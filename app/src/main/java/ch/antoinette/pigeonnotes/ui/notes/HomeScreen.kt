@@ -1,6 +1,7 @@
 package ch.antoinette.pigeonnotes.ui.notes
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +66,7 @@ import ch.antoinette.pigeonnotes.ui.graphViewModel
  * The start screen, top to bottom: quick notes (short-term, in the root folder), the pages row
  * (long-term, `Pages/`) and the tagged notes (medium-term, `Tags/`) behind a row of tag pills.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     onOpenNote: (String) -> Unit,
@@ -142,8 +143,10 @@ fun HomeScreen(
                         onAdd = { addingPage = true },
                     )
                 }
-                item("pills") {
-                    TagPills(state.tags, state.tagFilter, onFilter = vm::filterTags, onAdd = { addingTag = true })
+                stickyHeader("pills") {
+                    Box(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).padding(vertical = 4.dp)) {
+                        TagPills(state.tags, state.tagFilter, onFilter = vm::filterTags, onAdd = { addingTag = true })
+                    }
                 }
                 if (state.tagged.isEmpty()) {
                     item("empty-tags") {
@@ -159,22 +162,13 @@ fun HomeScreen(
                         )
                     }
                 }
-                items(state.tagged.chunked(2), key = { it.first().path }) { pair ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        for (row in pair) {
-                            Box(Modifier.weight(1f)) {
-                                NoteTile(
-                                    row = row,
-                                    selected = row.path in state.picked,
-                                    onClick = { tapNote(row.path) },
-                                    onLongClick = { vm.selection.toggle(row.path) },
-                                )
-                            }
-                        }
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                if (state.tagged.isNotEmpty()) {
+                    item("tagged") {
+                        StaggeredTiles(
+                            state.tagged, state.picked,
+                            onTap = ::tapNote, onLongPress = vm.selection::toggle,
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
                     }
                 }
             }
@@ -253,24 +247,53 @@ private fun QuickNotes(
             .clip(RoundedCornerShape(20.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        for (pair in quick.chunked(2)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (row in pair) {
-                    Box(Modifier.weight(1f)) {
-                        NoteTile(
-                            row = row,
-                            selected = row.path in picked,
-                            onClick = { onTap(row.path) },
-                            onLongClick = { onLongPress(row.path) },
-                        )
-                    }
+        StaggeredTiles(quick, picked, onTap, onLongPress)
+    }
+}
+
+/**
+ * Two columns of tiles packed like a masonry: each tile goes to the column that is estimated to be
+ * shorter, so tiles of different heights leave no gaps.
+ */
+@Composable
+private fun StaggeredTiles(
+    rows: List<NoteRow>,
+    picked: Set<String>,
+    onTap: (String) -> Unit,
+    onLongPress: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val columns = remember(rows) {
+        val left = ArrayList<NoteRow>(); val right = ArrayList<NoteRow>()
+        var leftHeight = 0; var rightHeight = 0
+        for (row in rows) {
+            val h = estimatedLines(row)
+            if (leftHeight <= rightHeight) { left += row; leftHeight += h } else { right += row; rightHeight += h }
+        }
+        left to right
+    }
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (column in listOf(columns.first, columns.second)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (row in column) {
+                    NoteTile(
+                        row = row,
+                        selected = row.path in picked,
+                        onClick = { onTap(row.path) },
+                        onLongClick = { onLongPress(row.path) },
+                    )
                 }
-                if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
     }
+}
+
+/** Rough tile height in text lines, from how the title and preview wrap in a half-width tile. */
+private fun estimatedLines(row: NoteRow): Int {
+    val title = ((row.title.length + 19) / 20).coerceIn(1, 2)
+    val preview = if (row.preview.isEmpty()) 0 else ((row.preview.length + 25) / 26).coerceIn(1, 8)
+    return title * 2 + preview + 2 // the title is larger; the footer row counts as two
 }
 
 private val PageTileHeight = 132.dp
