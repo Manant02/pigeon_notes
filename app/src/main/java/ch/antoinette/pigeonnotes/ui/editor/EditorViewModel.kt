@@ -10,6 +10,8 @@ import androidx.lifecycle.viewModelScope
 import ch.antoinette.pigeonnotes.AppGraph
 import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.domain.NotesRepository
+import ch.antoinette.pigeonnotes.ui.notes.pageFolder
+import ch.antoinette.pigeonnotes.ui.notes.tagFolder
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -31,11 +33,14 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
     var archived by mutableStateOf(initialPath.startsWith(NotesRepository.ARCHIVE_DIR + "/"))
         private set
 
-    /** Every category, for the "move to" picker. */
-    val categories = graph.notes.categories
+    /** Tags and page folders, for the "tag" and "add to page" pickers. */
+    val structure = graph.notes.structure
 
-    /** The folder the note is in right now (`""` = no category). */
-    val category: String get() = if ('/' in path) path.substringBeforeLast('/') else ""
+    /** The note's tag: `""` when untagged under `Tags/`, null when not under `Tags/` at all. */
+    val tag: String? get() = if (path.startsWith(NotesRepository.TAGS_DIR + "/")) NotesRepository.tagOf(path) ?: "" else null
+
+    /** The note's page folder name: `""` for a standalone page, null when not under `Pages/`. */
+    val pageFolder: String? get() = if (path.startsWith(NotesRepository.PAGES_DIR + "/")) NotesRepository.pageFolderOf(path)?.substringAfterLast('/') ?: "" else null
 
     /** Whole-document field used in source mode. */
     val sourceField = TextFieldState()
@@ -122,7 +127,23 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
 
     fun archive(archive: Boolean) = moveNote(newParent = if (archive) NotesRepository.ARCHIVE_DIR else "")
 
-    fun moveToCategory(category: String) = moveNote(newParent = category)
+    fun applyTag(tag: String) = moveNote(newParent = tagFolder(tag))
+
+    fun addToPage(folder: String) = moveNote(newParent = pageFolder(folder))
+
+    fun createTagAndApply(name: String) {
+        viewModelScope.launch {
+            val created = graph.notes.createFolder(NotesRepository.TAGS_DIR, name) ?: return@launch
+            applyTag(created.substringAfterLast('/'))
+        }
+    }
+
+    fun createPageFolderAndApply(name: String) {
+        viewModelScope.launch {
+            val created = graph.notes.createFolder(NotesRepository.PAGES_DIR, name) ?: return@launch
+            addToPage(created.substringAfterLast('/'))
+        }
+    }
 
     private fun moveNote(newParent: String? = null, newTitle: String? = null) {
         viewModelScope.launch {

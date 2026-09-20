@@ -14,6 +14,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.foundation.layout.width
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,11 +51,37 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
+data class TreeLine(val depth: Int, val name: String, val summary: String)
+
 class SettingsViewModel(private val graph: AppGraph) : ViewModel() {
     val account = graph.settings.account
     val status = graph.syncEngine.status
     val log = graph.syncEngine.log
     val lastSync = graph.settings.lastSync
+
+    /** The synced tree as folders only, each with a one-line summary of what it holds directly. */
+    val tree: Flow<List<TreeLine>> = combine(graph.db.syncDao().observeDirs(), graph.db.syncDao().observeFiles()) { dirs, files ->
+        val folders = dirs.map { it.path }.filter { !it.endsWith(".assets") }.toSet() + ""
+        folders.sorted().map { dir ->
+            val prefix = if (dir.isEmpty()) "" else "$dir/"
+            val here = files.filter { it.parent == dir }
+            val notes = here.count { it.isNote }
+            val assets = dirs.count { it.path.endsWith(".assets") && it.parent == dir }
+            val other = here.size - notes
+            val parts = listOfNotNull(
+                plural(notes, "markdown file"),
+                plural(assets, "assets folder"),
+                plural(other, "other file"),
+            )
+            TreeLine(
+                depth = if (dir.isEmpty()) 0 else dir.count { it == '/' } + 1,
+                name = if (dir.isEmpty()) "/Notes" else dir.substringAfterLast('/'),
+                summary = if (parts.isEmpty()) "empty" else parts.joinToString(", "),
+            )
+        }
+    }
+
+    private fun plural(n: Int, what: String) = if (n == 0) null else "$n $what${if (n == 1) "" else "s"}"
 
     /** Non-null while a browser login is in progress; the URL to open. */
     val loginUrl = MutableStateFlow<String?>(null)
@@ -106,6 +136,7 @@ fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = graphViewModel { 
     val status by vm.status.collectAsStateWithLifecycle()
     val log by vm.log.collectAsStateWithLifecycle()
     val lastSync by vm.lastSync.collectAsStateWithLifecycle(null)
+    val tree by vm.tree.collectAsStateWithLifecycle(emptyList())
     val loginUrl by vm.loginUrl.collectAsStateWithLifecycle()
     val loginError by vm.loginError.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -165,7 +196,20 @@ fun SettingsScreen(onBack: () -> Unit, vm: SettingsViewModel = graphViewModel { 
                 }
             }
 
-            Text("Sync log", style = MaterialTheme.typography.titleSmall)
+            Text("Files on the server", style = MaterialTheme.typography.titleSmall)
+            HorizontalDivider()
+            if (tree.isEmpty()) Text("Nothing synced yet.", style = MaterialTheme.typography.bodySmall)
+            for (line in tree) {
+                Row(Modifier.padding(start = (line.depth * 16).dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Folder, null, Modifier.height(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(6.dp))
+                    Text(line.name, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(8.dp))
+                    Text(line.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Text("Sync log", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
             HorizontalDivider()
             if (log.isEmpty()) Text("Nothing yet.", style = MaterialTheme.typography.bodySmall)
             log.forEach {

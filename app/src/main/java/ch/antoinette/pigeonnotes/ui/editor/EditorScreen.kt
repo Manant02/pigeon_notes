@@ -27,7 +27,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.DriveFileMove
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -58,7 +59,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.antoinette.pigeonnotes.ui.graphViewModel
-import ch.antoinette.pigeonnotes.ui.notes.CategoryPickerDialog
+import ch.antoinette.pigeonnotes.domain.Structure
+import ch.antoinette.pigeonnotes.ui.notes.PagePickerDialog
+import ch.antoinette.pigeonnotes.ui.notes.TagPickerDialog
 import ch.antoinette.pigeonnotes.ui.theme.EditorType
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,8 +73,9 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
-    var moving by remember { mutableStateOf(false) }
-    val categories by vm.categories.collectAsStateWithLifecycle(emptyList())
+    var tagging by remember { mutableStateOf(false) }
+    var paging by remember { mutableStateOf(false) }
+    val structure by vm.structure.collectAsStateWithLifecycle(Structure())
 
     // No sync while the note is open; whatever was requested meanwhile runs when the screen closes.
     DisposableEffect(vm) {
@@ -128,9 +132,14 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                             onClick = { menuOpen = false; renaming = true },
                         )
                         DropdownMenuItem(
-                            text = { Text("Move to category…") },
-                            leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null) },
-                            onClick = { menuOpen = false; moving = true },
+                            text = { Text(if (vm.tag != null) "Change tag…" else "Tag…") },
+                            leadingIcon = { Icon(Icons.Outlined.Label, null) },
+                            onClick = { menuOpen = false; tagging = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (vm.pageFolder != null) "Change page…" else "Add to page…") },
+                            leadingIcon = { Icon(Icons.Outlined.Folder, null) },
+                            onClick = { menuOpen = false; paging = true },
                         )
                         DropdownMenuItem(
                             text = { Text(if (vm.archived) "Unarchive" else "Archive") },
@@ -174,13 +183,24 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
         }
     }
 
-    if (moving) {
-        CategoryPickerDialog(
-            title = "Move to",
-            categories = categories,
-            current = vm.category,
-            onDismiss = { moving = false },
-            onPick = { vm.moveToCategory(it); moving = false },
+    if (tagging) {
+        TagPickerDialog(
+            title = "Tag note",
+            tags = structure.tags,
+            current = vm.tag,
+            onDismiss = { tagging = false },
+            onPick = { vm.applyTag(it); tagging = false },
+            onCreate = { vm.createTagAndApply(it); tagging = false },
+        )
+    }
+    if (paging) {
+        PagePickerDialog(
+            title = "Add to page",
+            folders = structure.pageFolders,
+            current = vm.pageFolder,
+            onDismiss = { paging = false },
+            onPick = { vm.addToPage(it); paging = false },
+            onCreate = { vm.createPageFolderAndApply(it); paging = false },
         )
     }
 

@@ -358,6 +358,9 @@ class SyncEngine(
                 return
             }
             drop(from)
+            // The pass's listing still shows the source; forget it so the old path is not "downloaded".
+            remote.remove(from)
+            if (entry.isDir) remote.keys.filter { it.startsWith("$from/") }.forEach { remote.remove(it) }
             if (entry.isDir) {
                 val listing = dav.propfind(path, depth = 1)
                 stats.propfinds++
@@ -378,12 +381,8 @@ class SyncEngine(
             val f = files.file(e.path)
             if (!e.isNote) return e.copy(modified = f.lastModified(), size = f.length())
             val text = runCatching { f.readText() }.getOrDefault("")
-            return e.copy(
-                title = NoteText.title(e.path),
-                preview = NoteText.preview(text),
-                modified = f.lastModified(),
-                size = f.length(),
-            )
+            val (title, preview) = NoteText.index(e.path, text)
+            return e.copy(title = title, preview = preview, modified = f.lastModified(), size = f.length())
         }
 
         private suspend fun save(e: SyncEntry) {

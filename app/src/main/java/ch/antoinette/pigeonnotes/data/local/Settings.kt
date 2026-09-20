@@ -41,43 +41,37 @@ class Settings(private val context: Context) : AccountSource {
         val notesRoot = stringPreferencesKey("notes_root")
         val lastSync = longPreferencesKey("last_sync")
         val tileView = booleanPreferencesKey("tile_view")
-        val recentCount = intPreferencesKey("recent_count")
-        val categoryOrder = stringPreferencesKey("category_order")
-        val pinnedCategories = stringPreferencesKey("pinned_categories")
-        val categoryColors = stringPreferencesKey("category_colors")
+        val pageRows = intPreferencesKey("page_rows")
+        val pageOrder = stringPreferencesKey("page_order")
+        val pageColors = stringPreferencesKey("page_colors")
     }
 
-    /** Show the note list as Keep-style tiles instead of rows. */
+    /** Show note lists as Keep-style tiles instead of rows. */
     val tileView: Flow<Boolean> = context.dataStore.data.map { it[Keys.tileView] ?: false }
-
-    /** User-chosen order of category chips; categories not listed follow alphabetically. */
-    val categoryOrder: Flow<List<String>> = context.dataStore.data.map { prefs ->
-        prefs[Keys.categoryOrder]?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
-    }
 
     suspend fun setTileView(enabled: Boolean) {
         context.dataStore.edit { it[Keys.tileView] = enabled }
     }
 
-    /** How many recent notes the home screen shows; always even, since they sit two per row. */
-    val recentCount: Flow<Int> = context.dataStore.data.map { it[Keys.recentCount] ?: DEFAULT_RECENT_COUNT }
+    /** How many rows the horizontally scrolling page tiles on the home screen use. */
+    val pageRows: Flow<Int> = context.dataStore.data.map { it[Keys.pageRows] ?: DEFAULT_PAGE_ROWS }
 
-    suspend fun setRecentCount(count: Int) {
-        context.dataStore.edit { it[Keys.recentCount] = count.coerceIn(RECENT_COUNT_OPTIONS.first(), RECENT_COUNT_OPTIONS.last()).let { c -> c - c % 2 } }
+    suspend fun setPageRows(rows: Int) {
+        context.dataStore.edit { it[Keys.pageRows] = rows.coerceIn(PAGE_ROW_OPTIONS.first(), PAGE_ROW_OPTIONS.last()) }
     }
 
-    suspend fun setCategoryOrder(order: List<String>) {
-        context.dataStore.edit { it[Keys.categoryOrder] = order.joinToString("\u0000") }
+    /** User-chosen order of pages (by path); pages not listed follow alphabetically. */
+    val pageOrder: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.pageOrder]?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
     }
 
-    /** Categories shown as their own section on the home screen, in order. */
-    val pinnedCategories: Flow<List<String>> = context.dataStore.data.map { prefs ->
-        prefs[Keys.pinnedCategories]?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
+    suspend fun setPageOrder(order: List<String>) {
+        context.dataStore.edit { it[Keys.pageOrder] = order.joinToString("\u0000") }
     }
 
-    /** Accent colour per category, as the name of a [ch.antoinette.pigeonnotes.ui.notes.CategoryAccent]. */
-    val categoryColors: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
-        prefs[Keys.categoryColors]?.split('\u0000').orEmpty()
+    /** Accent colour per page path, as the name of a [ch.antoinette.pigeonnotes.ui.notes.CategoryAccent]. */
+    val pageColors: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.pageColors]?.split('\u0000').orEmpty()
             .mapNotNull { entry ->
                 val i = entry.indexOf('\u0001')
                 if (i <= 0) null else entry.substring(0, i) to entry.substring(i + 1)
@@ -85,25 +79,20 @@ class Settings(private val context: Context) : AccountSource {
             .toMap()
     }
 
-    suspend fun setPinnedCategories(pinned: List<String>) {
-        context.dataStore.edit { it[Keys.pinnedCategories] = pinned.joinToString("\u0000") }
-    }
-
-    suspend fun setCategoryColor(category: String, accent: String) {
+    suspend fun setPageColor(page: String, accent: String) {
         context.dataStore.edit { prefs ->
-            val current = prefs[Keys.categoryColors]?.split('\u0000').orEmpty()
-                .filter { it.isNotEmpty() && !it.startsWith(category + '\u0001') }
-            prefs[Keys.categoryColors] = (current + (category + '\u0001' + accent)).joinToString("\u0000")
+            val current = prefs[Keys.pageColors]?.split('\u0000').orEmpty()
+                .filter { it.isNotEmpty() && !it.startsWith(page + '\u0001') }
+            prefs[Keys.pageColors] = (current + (page + '\u0001' + accent)).joinToString("\u0000")
         }
     }
 
-    /** Keeps the per-category settings pointing at a folder that was renamed, or drops a deleted one. */
-    suspend fun renameCategoryRefs(from: String, to: String?) {
+    /** Keeps the per-page settings pointing at a page that was renamed, or drops a deleted one. */
+    suspend fun renamePageRefs(from: String, to: String?) {
         context.dataStore.edit { prefs ->
-            fun rewrite(list: List<String>) = list.mapNotNull { if (it == from) to else it }
-            prefs[Keys.categoryOrder] = rewrite(prefs[Keys.categoryOrder]?.split('\u0000').orEmpty().filter { it.isNotEmpty() }).joinToString("\u0000")
-            prefs[Keys.pinnedCategories] = rewrite(prefs[Keys.pinnedCategories]?.split('\u0000').orEmpty().filter { it.isNotEmpty() }).joinToString("\u0000")
-            prefs[Keys.categoryColors] = prefs[Keys.categoryColors]?.split('\u0000').orEmpty()
+            prefs[Keys.pageOrder] = prefs[Keys.pageOrder]?.split('\u0000').orEmpty()
+                .filter { it.isNotEmpty() }.mapNotNull { if (it == from) to else it }.joinToString("\u0000")
+            prefs[Keys.pageColors] = prefs[Keys.pageColors]?.split('\u0000').orEmpty()
                 .filter { it.isNotEmpty() }
                 .mapNotNull { entry ->
                     val i = entry.indexOf('\u0001')
@@ -150,7 +139,7 @@ class Settings(private val context: Context) : AccountSource {
     }
 
     companion object {
-        const val DEFAULT_RECENT_COUNT = 4
-        val RECENT_COUNT_OPTIONS = listOf(2, 4, 6, 8)
+        const val DEFAULT_PAGE_ROWS = 2
+        val PAGE_ROW_OPTIONS = listOf(1, 2, 3)
     }
 }

@@ -32,15 +32,15 @@ class MainActivity : ComponentActivity() {
         handleShare(intent)
     }
 
-    /** "Share to Pigeon Notes": text (or a URL) becomes a new note in the root folder. */
+    /** "Share to Pigeon Notes": text (or a URL) becomes a new quick note; a subject becomes its first line. */
     private fun handleShare(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
-        val title = subject?.takeIf { it.isNotBlank() } ?: text.lineSequence().first().take(60)
+        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.takeIf { it.isNotBlank() }
+        val body = if (subject != null && !text.startsWith(subject)) "$subject\n\n$text\n" else text + "\n"
         intent.action = null // consume, so rotation does not re-share
         lifecycleScope.launch {
-            sharedNotePath = AppGraph.get(this@MainActivity).notes.create("", title, text + "\n")
+            sharedNotePath = AppGraph.get(this@MainActivity).notes.create("", initialText = body)
         }
     }
 }

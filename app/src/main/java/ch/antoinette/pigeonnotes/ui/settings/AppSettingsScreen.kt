@@ -16,10 +16,7 @@ import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.CreateNewFolder
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -32,8 +29,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material3.Switch
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Label
+import androidx.compose.material.icons.outlined.NewLabel
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
@@ -64,69 +62,69 @@ import ch.antoinette.pigeonnotes.AppGraph
 import ch.antoinette.pigeonnotes.data.local.Settings
 import ch.antoinette.pigeonnotes.ui.graphViewModel
 import ch.antoinette.pigeonnotes.domain.NotesRepository
+import ch.antoinette.pigeonnotes.domain.NoteText
+import ch.antoinette.pigeonnotes.domain.Page
 import ch.antoinette.pigeonnotes.ui.notes.CategoryAccent
+import ch.antoinette.pigeonnotes.ui.notes.NameDialog
 import ch.antoinette.pigeonnotes.ui.notes.color
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
     val tileView = graph.settings.tileView
-    val recentCount = graph.settings.recentCount
+    val pageRows = graph.settings.pageRows
 
-    /** Every category, in the user's saved order. */
-    val categories: Flow<List<String>> = combine(graph.notes.categories, graph.settings.categoryOrder) { all, order ->
-        order.filter { it in all } + all.filter { it !in order }
+    /** Every page, in the user's saved order. */
+    val pages: Flow<List<Page>> = combine(graph.notes.structure, graph.settings.pageOrder) { s, order ->
+        order.mapNotNull { p -> s.pages.firstOrNull { it.path == p } } + s.pages.filter { it.path !in order }
     }
 
-    val pinned: Flow<List<String>> = graph.settings.pinnedCategories
-    val colors: Flow<Map<String, String>> = graph.settings.categoryColors
+    val tags: Flow<List<String>> = graph.notes.structure.map { it.tags }
+    val colors: Flow<Map<String, String>> = graph.settings.pageColors
 
-    /** Set when a category could not be deleted because files are still in its folder. */
+    /** Set when a folder could not be deleted because files are still in it. */
     val notEmpty = MutableStateFlow<Pair<String, List<String>>?>(null)
 
     fun setTileView(enabled: Boolean) {
         viewModelScope.launch { graph.settings.setTileView(enabled) }
     }
 
-    fun setRecentCount(count: Int) {
-        viewModelScope.launch { graph.settings.setRecentCount(count) }
+    fun setPageRows(rows: Int) {
+        viewModelScope.launch { graph.settings.setPageRows(rows) }
     }
 
-    fun setCategoryOrder(order: List<String>) {
-        viewModelScope.launch { graph.settings.setCategoryOrder(order) }
+    fun setPageOrder(order: List<String>) {
+        viewModelScope.launch { graph.settings.setPageOrder(order) }
     }
 
-    fun createCategory(name: String) {
-        viewModelScope.launch { graph.notes.createCategory(name) }
+    fun createPageFolder(name: String) {
+        viewModelScope.launch { graph.notes.createFolder(NotesRepository.PAGES_DIR, name) }
     }
 
-    fun renameCategory(path: String, newName: String) {
+    fun createTag(name: String) {
+        viewModelScope.launch { graph.notes.createFolder(NotesRepository.TAGS_DIR, name) }
+    }
+
+    /** Renames a page (folder or single note) or a tag; order and colour follow it. */
+    fun rename(page: Page?, path: String, newName: String) {
         viewModelScope.launch {
-            val newPath = graph.notes.renameCategory(path, newName)
-            // order, pin and colour follow the folder to its new name
-            if (newPath != path) graph.settings.renameCategoryRefs(path, newPath)
+            val newPath = if (page is Page.Single) graph.notes.rename(path, newName) else graph.notes.renameFolder(path, newName)
+            if (newPath != path) graph.settings.renamePageRefs(path, newPath)
         }
     }
 
-    fun setPinned(category: String, pin: Boolean) {
-        viewModelScope.launch {
-            val current = graph.settings.pinnedCategories.first()
-            graph.settings.setPinnedCategories(if (pin) (current - category) + category else current - category)
-        }
+    fun setColor(page: String, accent: CategoryAccent) {
+        viewModelScope.launch { graph.settings.setPageColor(page, accent.name) }
     }
 
-    fun setColor(category: String, accent: CategoryAccent) {
-        viewModelScope.launch { graph.settings.setCategoryColor(category, accent.name) }
-    }
-
-    fun deleteCategory(path: String) {
+    fun deleteFolder(path: String) {
         viewModelScope.launch {
-            when (val result = graph.notes.deleteCategory(path)) {
-                is NotesRepository.CategoryDeletion.NotEmpty -> notEmpty.value = path to result.remaining
-                NotesRepository.CategoryDeletion.Deleted -> graph.settings.renameCategoryRefs(path, null)
+            when (val result = graph.notes.deleteFolder(path)) {
+                is NotesRepository.FolderDeletion.NotEmpty -> notEmpty.value = path to result.remaining
+                NotesRepository.FolderDeletion.Deleted -> graph.settings.renamePageRefs(path, null)
             }
         }
     }
@@ -142,16 +140,18 @@ fun AppSettingsScreen(
     vm: AppSettingsViewModel = graphViewModel { AppSettingsViewModel(it) },
 ) {
     val tiles by vm.tileView.collectAsStateWithLifecycle(false)
-    val recentCount by vm.recentCount.collectAsStateWithLifecycle(Settings.DEFAULT_RECENT_COUNT)
-    val categories by vm.categories.collectAsStateWithLifecycle(emptyList())
+    val pageRows by vm.pageRows.collectAsStateWithLifecycle(Settings.DEFAULT_PAGE_ROWS)
+    val pages by vm.pages.collectAsStateWithLifecycle(emptyList())
+    val tags by vm.tags.collectAsStateWithLifecycle(emptyList())
+    val colors by vm.colors.collectAsStateWithLifecycle(emptyMap())
     val notEmpty by vm.notEmpty.collectAsStateWithLifecycle()
     var reordering by remember { mutableStateOf(false) }
-    var creating by remember { mutableStateOf(false) }
-    var renaming by remember { mutableStateOf<String?>(null) }
+    var creatingPage by remember { mutableStateOf(false) }
+    var creatingTag by remember { mutableStateOf(false) }
+    var editingPage by remember { mutableStateOf<Page?>(null) }
+    var editingTag by remember { mutableStateOf<String?>(null) }
+    var renaming by remember { mutableStateOf<Pair<Page?, String>?>(null) } // (page or null for a tag, path)
     var confirmDelete by remember { mutableStateOf<String?>(null) }
-    var editing by remember { mutableStateOf<String?>(null) }
-    val pinned by vm.pinned.collectAsStateWithLifecycle(emptyList())
-    val colors by vm.colors.collectAsStateWithLifecycle(emptyMap())
 
     Scaffold(
         topBar = {
@@ -165,12 +165,7 @@ fun AppSettingsScreen(
             Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                "Appearance",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp),
-            )
+            SectionTitle("Appearance")
             ListItem(
                 headlineContent = { Text("Note layout") },
                 supportingContent = { Text(if (tiles) "Tiles, like Keep" else "One note per row") },
@@ -194,15 +189,15 @@ fun AppSettingsScreen(
                 },
             )
             ListItem(
-                headlineContent = { Text("Recent notes on home") },
-                supportingContent = { Text("$recentCount notes, two per row") },
+                headlineContent = { Text("Page rows on home") },
+                supportingContent = { Text(if (pageRows == 1) "One row of page tiles" else "$pageRows rows of page tiles") },
                 trailingContent = {
                     SingleChoiceSegmentedButtonRow {
-                        Settings.RECENT_COUNT_OPTIONS.forEachIndexed { i, n ->
+                        Settings.PAGE_ROW_OPTIONS.forEachIndexed { i, n ->
                             SegmentedButton(
-                                selected = recentCount == n,
-                                onClick = { vm.setRecentCount(n) },
-                                shape = SegmentedButtonDefaults.itemShape(index = i, count = Settings.RECENT_COUNT_OPTIONS.size),
+                                selected = pageRows == n,
+                                onClick = { vm.setPageRows(n) },
+                                shape = SegmentedButtonDefaults.itemShape(index = i, count = Settings.PAGE_ROW_OPTIONS.size),
                                 icon = {},
                                 label = { Text("$n") },
                             )
@@ -210,84 +205,114 @@ fun AppSettingsScreen(
                     }
                 },
             )
-            ListItem(
-                headlineContent = { Text("Category order") },
-                supportingContent = {
-                    Text(if (categories.isEmpty()) "No categories yet" else categories.joinToString(" · "))
-                },
-                modifier = Modifier.clickable(enabled = categories.isNotEmpty()) { reordering = true },
-            )
 
-            Text(
-                "Categories",
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp),
+            SectionTitle("Pages")
+            ListItem(
+                headlineContent = { Text("Page order") },
+                supportingContent = {
+                    Text(if (pages.isEmpty()) "No pages yet" else pages.joinToString(" · ") { it.name })
+                },
+                modifier = Modifier.clickable(enabled = pages.isNotEmpty()) { reordering = true },
             )
-            for (c in categories) {
-                val accent = CategoryAccent.of(colors[c])
+            for (page in pages) {
+                val accent = CategoryAccent.of(colors[page.path])
                 ListItem(
-                    headlineContent = { Text(c) },
+                    headlineContent = { Text(page.name) },
                     supportingContent = {
-                        Text(listOfNotNull(accent.label.takeIf { accent != CategoryAccent.DEFAULT }, "Pinned".takeIf { c in pinned })
-                            .joinToString(" · ").ifEmpty { "Tap to edit" })
+                        Text(
+                            listOfNotNull(
+                                if (page is Page.Folder) "Folder" else "Single page",
+                                accent.label.takeIf { accent != CategoryAccent.DEFAULT },
+                            ).joinToString(" · ")
+                        )
                     },
-                    leadingContent = { Icon(Icons.Outlined.Folder, null, tint = accent.color()) },
-                    trailingContent = {
-                        if (c in pinned) Icon(Icons.Outlined.PushPin, "Pinned", tint = accent.color())
+                    leadingContent = {
+                        Icon(if (page is Page.Folder) Icons.Outlined.Folder else Icons.Outlined.Article, null, tint = accent.color())
                     },
-                    modifier = Modifier.clickable { editing = c },
+                    modifier = Modifier.clickable { editingPage = page },
                 )
             }
             ListItem(
-                headlineContent = { Text("New category") },
+                headlineContent = { Text("New page folder") },
                 leadingContent = { Icon(Icons.Outlined.CreateNewFolder, null) },
-                modifier = Modifier.clickable { creating = true },
+                modifier = Modifier.clickable { creatingPage = true },
+            )
+
+            SectionTitle("Tags")
+            for (tag in tags) {
+                ListItem(
+                    headlineContent = { Text(tag) },
+                    leadingContent = { Icon(Icons.Outlined.Label, null) },
+                    modifier = Modifier.clickable { editingTag = tag },
+                )
+            }
+            ListItem(
+                headlineContent = { Text("New tag") },
+                leadingContent = { Icon(Icons.Outlined.NewLabel, null) },
+                modifier = Modifier.clickable { creatingTag = true },
             )
         }
     }
 
-    editing?.let { category ->
-        CategoryDetailDialog(
-            category = category,
-            accent = CategoryAccent.of(colors[category]),
-            pinned = category in pinned,
-            onAccent = { vm.setColor(category, it) },
-            onPinned = { vm.setPinned(category, it) },
-            onRename = { editing = null; renaming = category },
-            onDelete = { editing = null; confirmDelete = category },
-            onDismiss = { editing = null },
+    editingPage?.let { page ->
+        PageDetailDialog(
+            page = page,
+            accent = CategoryAccent.of(colors[page.path]),
+            onAccent = { vm.setColor(page.path, it) },
+            onRename = { editingPage = null; renaming = page to page.path },
+            onDelete = if (page is Page.Folder) ({ editingPage = null; confirmDelete = page.path }) else null,
+            onDismiss = { editingPage = null },
         )
     }
 
-    if (creating) {
-        CategoryNameDialog(
-            title = "New category",
-            initial = "",
-            confirm = "Create",
-            taken = categories,
-            onDismiss = { creating = false },
-            onConfirm = { vm.createCategory(it); creating = false },
+    editingTag?.let { tag ->
+        val path = NotesRepository.TAGS_DIR + "/" + tag
+        AlertDialog(
+            onDismissRequest = { editingTag = null },
+            title = { Text(tag) },
+            text = {
+                Row {
+                    TextButton(onClick = { editingTag = null; renaming = null to path }) { Text("Rename") }
+                    TextButton(onClick = { editingTag = null; confirmDelete = path }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { editingTag = null }) { Text("Done") } },
         )
     }
 
-    renaming?.let { path ->
-        CategoryNameDialog(
-            title = "Rename category",
-            initial = path.substringAfterLast('/'),
+    if (creatingPage) {
+        NameDialog(
+            title = "New page folder", initial = "", confirm = "Create", taken = pages.map { it.name },
+            onDismiss = { creatingPage = false },
+            onConfirm = { vm.createPageFolder(it); creatingPage = false },
+        )
+    }
+    if (creatingTag) {
+        NameDialog(
+            title = "New tag", initial = "", confirm = "Create", taken = tags,
+            onDismiss = { creatingTag = false },
+            onConfirm = { vm.createTag(it); creatingTag = false },
+        )
+    }
+
+    renaming?.let { (page, path) ->
+        val name = NoteText.title(path)
+        NameDialog(
+            title = if (page == null) "Rename tag" else "Rename page",
+            initial = name,
             confirm = "Rename",
-            taken = categories - path,
+            taken = (if (page == null) tags else pages.map { it.name }) - name,
             onDismiss = { renaming = null },
-            onConfirm = { vm.renameCategory(path, it); renaming = null },
+            onConfirm = { vm.rename(page, path, it); renaming = null },
         )
     }
 
     confirmDelete?.let { path ->
         AlertDialog(
             onDismissRequest = { confirmDelete = null },
-            title = { Text("Delete “$path”?") },
-            text = { Text("The folder is removed here and on the server. Only empty categories can be deleted.") },
-            confirmButton = { TextButton(onClick = { vm.deleteCategory(path); confirmDelete = null }) { Text("Delete") } },
+            title = { Text("Delete “${NoteText.title(path)}”?") },
+            text = { Text("The folder is removed here and on the server. Only empty folders can be deleted.") },
+            confirmButton = { TextButton(onClick = { vm.deleteFolder(path); confirmDelete = null }) { Text("Delete") } },
             dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
     }
@@ -295,7 +320,7 @@ fun AppSettingsScreen(
     notEmpty?.let { (path, remaining) ->
         AlertDialog(
             onDismissRequest = vm::dismissNotEmpty,
-            title = { Text("“$path” is not empty") },
+            title = { Text("“${NoteText.title(path)}” is not empty") },
             text = {
                 Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                     Text(
@@ -316,30 +341,38 @@ fun AppSettingsScreen(
     }
 
     if (reordering) {
-        ReorderCategoriesDialog(
-            categories = categories,
+        ReorderDialog(
+            items = pages.map { it.path to it.name },
             onDismiss = { reordering = false },
-            onSave = { vm.setCategoryOrder(it); reordering = false },
+            onSave = { vm.setPageOrder(it); reordering = false },
         )
     }
 }
 
-/** Colour, pinning, rename and delete for one category. */
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 16.dp, top = 16.dp),
+    )
+}
+
+/** Colour, rename and (for folders) delete for one page. */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun CategoryDetailDialog(
-    category: String,
+private fun PageDetailDialog(
+    page: Page,
     accent: CategoryAccent,
-    pinned: Boolean,
     onAccent: (CategoryAccent) -> Unit,
-    onPinned: (Boolean) -> Unit,
     onRename: () -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(category) },
+        title = { Text(page.name) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Colour", style = MaterialTheme.typography.labelLarge)
@@ -367,23 +400,9 @@ private fun CategoryDetailDialog(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.PushPin, null)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Pin to home", style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            "Show this category and its latest notes on the start screen",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = pinned, onCheckedChange = onPinned)
-                }
-                Spacer(Modifier.height(8.dp))
                 Row {
                     TextButton(onClick = onRename) { Text("Rename") }
-                    TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error) }
                 }
             }
         },
@@ -391,53 +410,18 @@ private fun CategoryDetailDialog(
     )
 }
 
-/** Asks for a category name and refuses duplicates before anything is created. */
+/** Up/down reordering of (key, label) pairs; [onSave] gets the keys in the new order. */
 @Composable
-private fun CategoryNameDialog(
-    title: String,
-    initial: String,
-    confirm: String,
-    taken: List<String>,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var name by remember { mutableStateOf(initial) }
-    val clash = name.isNotBlank() && taken.any { it.equals(name.trim(), ignoreCase = true) }
+private fun ReorderDialog(items: List<Pair<String, String>>, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
+    var order by remember { mutableStateOf(items) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    singleLine = true,
-                    label = { Text("Name") },
-                    isError = clash,
-                )
-                if (clash) {
-                    Text("That category already exists", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(name.trim()) }, enabled = name.isNotBlank() && !clash) { Text(confirm) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun ReorderCategoriesDialog(categories: List<String>, onDismiss: () -> Unit, onSave: (List<String>) -> Unit) {
-    var order by remember { mutableStateOf(categories) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Category order") },
+        title = { Text("Page order") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                order.forEachIndexed { i, c ->
+                order.forEachIndexed { i, (_, label) ->
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(c, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         IconButton(onClick = { order = order.swap(i, i - 1) }, enabled = i > 0) {
                             Icon(Icons.Default.KeyboardArrowUp, "Move up")
                         }
@@ -448,7 +432,7 @@ private fun ReorderCategoriesDialog(categories: List<String>, onDismiss: () -> U
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(order) }) { Text("Save") } },
+        confirmButton = { TextButton(onClick = { onSave(order.map { it.first }) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

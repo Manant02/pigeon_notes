@@ -9,27 +9,38 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import ch.antoinette.pigeonnotes.ui.editor.EditorScreen
-import ch.antoinette.pigeonnotes.ui.notes.CategoriesScreen
 import ch.antoinette.pigeonnotes.ui.notes.HomeScreen
+import ch.antoinette.pigeonnotes.ui.notes.ListScope
 import ch.antoinette.pigeonnotes.ui.notes.NoteListScreen
 import ch.antoinette.pigeonnotes.ui.settings.AppSettingsScreen
 import ch.antoinette.pigeonnotes.ui.settings.SettingsScreen
 
 object Routes {
     const val HOME = "home"
-    const val CATEGORIES = "categories"
-    /** `category`: empty = uncategorized, "all" = every note, otherwise the folder. */
-    const val LIST = "list/{category}?search={search}"
+    /** `scope`: [ALL], [ARCHIVE] or a folder path. */
+    const val LIST = "list/{scope}?search={search}"
     const val SYNC_SETTINGS = "settings/sync"
     const val APP_SETTINGS = "settings/app"
     const val EDITOR = "editor/{path}"
     fun editor(path: String) = "editor/" + Uri.encode(path)
 
-    /** [category] is null for every note, "" for uncategorized, otherwise the folder. */
-    fun list(category: String?, search: Boolean = false) =
-        "list/" + Uri.encode(category ?: ALL) + "?search=$search"
+    fun list(scope: ListScope, search: Boolean = false): String {
+        val raw = when (scope) {
+            ListScope.All -> ALL
+            ListScope.Archive -> ARCHIVE
+            is ListScope.Folder -> scope.path
+        }
+        return "list/" + Uri.encode(raw) + "?search=$search"
+    }
+
+    fun scopeOf(raw: String): ListScope = when (raw) {
+        ALL -> ListScope.All
+        ARCHIVE -> ListScope.Archive
+        else -> ListScope.Folder(raw)
+    }
 
     const val ALL = "\u0000all"
+    const val ARCHIVE = "\u0000archive"
 }
 
 @Composable
@@ -38,29 +49,22 @@ fun PigeonNavGraph(nav: NavHostController = rememberNavController(), startPath: 
         composable(Routes.HOME) {
             HomeScreen(
                 onOpenNote = { nav.navigate(Routes.editor(it)) },
-                onOpenCategory = { nav.navigate(Routes.list(it)) },
-                onSearch = { nav.navigate(Routes.list(null, search = true)) },
-                onOpenAllCategories = { nav.navigate(Routes.CATEGORIES) },
+                onOpenFolder = { nav.navigate(Routes.list(ListScope.Folder(it))) },
+                onSearch = { nav.navigate(Routes.list(ListScope.All, search = true)) },
+                onOpenArchive = { nav.navigate(Routes.list(ListScope.Archive)) },
                 onOpenSyncSettings = { nav.navigate(Routes.SYNC_SETTINGS) },
                 onOpenAppSettings = { nav.navigate(Routes.APP_SETTINGS) },
-            )
-        }
-        composable(Routes.CATEGORIES) {
-            CategoriesScreen(
-                onBack = { nav.popBackStack() },
-                onOpenCategory = { nav.navigate(Routes.list(it)) },
             )
         }
         composable(
             Routes.LIST,
             arguments = listOf(
-                navArgument("category") { type = NavType.StringType },
+                navArgument("scope") { type = NavType.StringType },
                 navArgument("search") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { entry ->
-            val raw = entry.arguments?.getString("category").orEmpty()
             NoteListScreen(
-                category = if (raw == Routes.ALL) null else raw,
+                scope = Routes.scopeOf(entry.arguments?.getString("scope").orEmpty()),
                 startSearching = entry.arguments?.getBoolean("search") == true,
                 onBack = { nav.popBackStack() },
                 onOpenNote = { nav.navigate(Routes.editor(it)) },

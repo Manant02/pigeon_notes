@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
@@ -34,7 +33,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.DriveFileMove
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
@@ -46,8 +46,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
+import androidx.compose.material3.contentColorFor
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,29 +82,37 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.antoinette.pigeonnotes.data.sync.SyncStatus
+import ch.antoinette.pigeonnotes.domain.Structure
 import ch.antoinette.pigeonnotes.ui.graphViewModel
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
+/**
+ * One folder of notes (a page folder, with the page's accent), the archive, or every note for
+ * searching. Long-press selects; the selection can be archived, deleted, tagged or added to a page.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NoteListScreen(
-    category: Category,
+    scope: ListScope,
     startSearching: Boolean = false,
     onBack: () -> Unit,
     onOpenNote: (String) -> Unit,
     onOpenSyncSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
-    vm: NoteListViewModel = graphViewModel(key = "list:$category") { NoteListViewModel(it, category) },
+    vm: NoteListViewModel = graphViewModel(key = "list:$scope") { NoteListViewModel(it, scope) },
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var searching by remember { mutableStateOf(startSearching) }
-    var confirmDeletePicked by remember { mutableStateOf(false) }
-    var movingPicked by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    var tagging by remember { mutableStateOf(false) }
+    var paging by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
-    val inArchive = state.selected == ARCHIVE_DIR
+    val inArchive = scope == ListScope.Archive
+    val accent = state.accent.color()
+    val tinted = state.accent != CategoryAccent.DEFAULT
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -112,23 +121,15 @@ fun NoteListScreen(
                 SelectionTopBar(
                     count = state.picked.size,
                     inArchive = inArchive,
-                    onClose = vm::clearPicks,
-                    onArchive = { vm.archivePicked(!inArchive) },
-                    onDelete = { confirmDeletePicked = true },
-                    onMove = { movingPicked = true },
+                    onClose = vm.selection::clear,
+                    onArchive = { vm.selection.archive(!inArchive) },
+                    onDelete = { confirmDelete = true },
+                    onTag = { tagging = true },
+                    onPage = { paging = true },
                 )
             } else {
                 LargeTopAppBar(
-                    title = {
-                        Text(
-                            when (state.selected) {
-                                null -> "All notes"
-                                "" -> "Uncategorized"
-                                ARCHIVE_DIR -> "Archive"
-                                else -> state.selected!!
-                            }
-                        )
-                    },
+                    title = { Text(state.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
@@ -139,13 +140,22 @@ fun NoteListScreen(
                         SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSyncSettings)
                         IconButton(onClick = onOpenAppSettings) { Icon(Icons.Default.Settings, "Settings") }
                     },
+                    colors = if (tinted) TopAppBarDefaults.largeTopAppBarColors(
+                        containerColor = state.accent.container(),
+                        scrolledContainerColor = state.accent.container(),
+                        titleContentColor = accent,
+                    ) else TopAppBarDefaults.largeTopAppBarColors(),
                     scrollBehavior = scrollBehavior,
                 )
             }
         },
         floatingActionButton = {
             if (!inArchive) {
-                FloatingActionButton(onClick = { vm.createNote(onOpenNote) }) {
+                FloatingActionButton(
+                    onClick = { vm.createNote(onOpenNote) },
+                    containerColor = if (tinted) accent else FloatingActionButtonDefaults.containerColor,
+                    contentColor = if (tinted) MaterialTheme.colorScheme.surface else contentColorFor(FloatingActionButtonDefaults.containerColor),
+                ) {
                     Icon(Icons.Default.Add, "New note")
                 }
             }
@@ -165,16 +175,19 @@ fun NoteListScreen(
                     ),
                 )
             }
-            CategoryChips(state.categories, state.selected, vm::select)
-            if (!state.configured) {
-                NotConfiguredHint(onOpenSyncSettings)
-            }
             PullToRefreshBox(
                 isRefreshing = state.status is SyncStatus.Syncing,
                 onRefresh = vm::refresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (state.tileView) {
+                if (state.rows.isEmpty()) {
+                    Text(
+                        if (state.query.isNotEmpty()) "Nothing matches." else "No notes here yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                } else if (state.tileView) {
                     LazyVerticalStaggeredGrid(
                         columns = StaggeredGridCells.Adaptive(160.dp),
                         modifier = Modifier.fillMaxSize(),
@@ -186,8 +199,8 @@ fun NoteListScreen(
                             NoteTile(
                                 row = row,
                                 selected = row.path in state.picked,
-                                onClick = { if (state.picked.isEmpty()) onOpenNote(row.path) else vm.togglePick(row.path) },
-                                onLongClick = { vm.togglePick(row.path) },
+                                onClick = { if (state.picked.isEmpty()) onOpenNote(row.path) else vm.selection.toggle(row.path) },
+                                onLongClick = { vm.selection.toggle(row.path) },
                             )
                         }
                     }
@@ -198,8 +211,8 @@ fun NoteListScreen(
                                 row = row,
                                 selected = row.path in state.picked,
                                 selecting = state.picked.isNotEmpty(),
-                                onClick = { if (state.picked.isEmpty()) onOpenNote(row.path) else vm.togglePick(row.path) },
-                                onLongClick = { vm.togglePick(row.path) },
+                                onClick = { if (state.picked.isEmpty()) onOpenNote(row.path) else vm.selection.toggle(row.path) },
+                                onLongClick = { vm.selection.toggle(row.path) },
                                 onDelete = { vm.delete(row.path) },
                             )
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -210,37 +223,62 @@ fun NoteListScreen(
         }
     }
 
-    if (confirmDeletePicked) {
-        val n = state.picked.size
-        AlertDialog(
-            onDismissRequest = { confirmDeletePicked = false },
-            title = { Text(if (n == 1) "Delete 1 note?" else "Delete $n notes?") },
-            text = { Text("The notes and their assets folders are removed here and on the server at the next sync.") },
-            confirmButton = { TextButton(onClick = { vm.deletePicked(); confirmDeletePicked = false }) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { confirmDeletePicked = false }) { Text("Cancel") } },
+    SelectionDialogs(
+        selection = vm.selection,
+        count = state.picked.size,
+        structure = state.structure,
+        confirmDelete = confirmDelete, onConfirmDeleteChange = { confirmDelete = it },
+        tagging = tagging, onTaggingChange = { tagging = it },
+        paging = paging, onPagingChange = { paging = it },
+    )
+}
+
+/** The delete / tag / add-to-page dialogs for a selection, shared by the home screen and note lists. */
+@Composable
+fun SelectionDialogs(
+    selection: NoteSelection,
+    count: Int,
+    structure: Structure,
+    confirmDelete: Boolean, onConfirmDeleteChange: (Boolean) -> Unit,
+    tagging: Boolean, onTaggingChange: (Boolean) -> Unit,
+    paging: Boolean, onPagingChange: (Boolean) -> Unit,
+) {
+    val what = if (count == 1) "note" else "$count notes"
+    if (confirmDelete) {
+        ConfirmDeleteDialog(count, onDismiss = { onConfirmDeleteChange(false) }) { selection.delete(); onConfirmDeleteChange(false) }
+    }
+    if (tagging) {
+        TagPickerDialog(
+            title = "Tag $what",
+            tags = structure.tags,
+            current = null,
+            onDismiss = { onTaggingChange(false) },
+            onPick = { selection.tag(it); onTaggingChange(false) },
+            onCreate = { selection.createTagAndApply(it); onTaggingChange(false) },
         )
     }
-
-    if (movingPicked) {
-        CategoryPickerDialog(
-            title = if (state.picked.size == 1) "Move note to" else "Move ${state.picked.size} notes to",
-            categories = state.categories,
+    if (paging) {
+        PagePickerDialog(
+            title = "Add $what to page",
+            folders = structure.pageFolders,
             current = null,
-            onDismiss = { movingPicked = false },
-            onPick = { vm.movePicked(it); movingPicked = false },
+            onDismiss = { onPagingChange(false) },
+            onPick = { selection.addToPage(it); onPagingChange(false) },
+            onCreate = { selection.createPageFolderAndApply(it); onPagingChange(false) },
         )
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectionTopBar(
+fun SelectionTopBar(
     count: Int,
     inArchive: Boolean,
     onClose: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit,
-    onMove: () -> Unit,
+    onTag: () -> Unit,
+    onPage: () -> Unit,
 ) {
     TopAppBar(
         title = { Text("$count selected") },
@@ -252,7 +290,8 @@ private fun SelectionTopBar(
                     if (inArchive) "Unarchive" else "Archive",
                 )
             }
-            IconButton(onClick = onMove) { Icon(Icons.Outlined.DriveFileMove, "Move to category") }
+            IconButton(onClick = onTag) { Icon(Icons.Outlined.Label, "Tag") }
+            IconButton(onClick = onPage) { Icon(Icons.Outlined.Folder, "Add to page") }
             IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete") }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -264,31 +303,9 @@ private fun SelectionTopBar(
     )
 }
 
-@Composable
-private fun CategoryChips(categories: List<String>, selected: Category, onSelect: (Category) -> Unit) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item { FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("All") }) }
-        item { FilterChip(selected = selected == "", onClick = { onSelect("") }, label = { Text("Notes") }) }
-        items(categories) { c ->
-            FilterChip(selected = selected == c, onClick = { onSelect(c) }, label = { Text(c) })
-        }
-        item {
-            FilterChip(
-                selected = selected == ARCHIVE_DIR,
-                onClick = { onSelect(ARCHIVE_DIR) },
-                label = { Text("Archive") },
-                leadingIcon = { Icon(Icons.Outlined.Archive, null, Modifier.size(18.dp)) },
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-private fun NoteListRow(
+fun NoteListRow(
     row: NoteRow,
     selected: Boolean,
     selecting: Boolean,
@@ -344,7 +361,7 @@ private fun NoteListRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteTile(row: NoteRow, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun NoteTile(row: NoteRow, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick),
         colors = CardDefaults.cardColors(
@@ -366,6 +383,13 @@ private fun NoteTile(row: NoteRow, selected: Boolean, onClick: () -> Unit, onLon
                 Text(relativeTime(row.modified), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(6.dp))
                 StatusDot(row)
+                if (row.tag != null) {
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        row.tag, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -398,7 +422,7 @@ fun SyncStatusIcon(status: SyncStatus, pending: Int, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NotConfiguredHint(onOpenSettings: () -> Unit) {
+fun NotConfiguredHint(onOpenSettings: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(16.dp),
         horizontalArrangement = Arrangement.SpaceBetween,

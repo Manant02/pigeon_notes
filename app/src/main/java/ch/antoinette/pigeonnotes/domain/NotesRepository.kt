@@ -11,6 +11,33 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+/** A long-term page: one markdown file directly in `Pages/`, or a folder of notes there. */
+sealed interface Page {
+    val path: String
+    val name: String get() = NoteText.title(path)
+
+    data class Single(val entry: SyncEntry) : Page {
+        override val path get() = entry.path
+    }
+
+    /** [notes] newest first. */
+    data class Folder(override val path: String, val notes: List<SyncEntry>) : Page
+}
+
+data class Structure(
+    /** Short-term notes in the root, newest first. */
+    val quick: List<SyncEntry> = emptyList(),
+    val pages: List<Page> = emptyList(),
+    /** Tag names (sub-folders of `Tags/`). */
+    val tags: List<String> = emptyList(),
+    /** Every note under `Tags/`, tagged or not, newest first. */
+    val tagged: List<SyncEntry> = emptyList(),
+) {
+    val pageFolders: List<String> get() = pages.filterIsInstance<Page.Folder>().map { it.name }
+}
 
 /**
  * All local note operations. Every change lands on disk immediately and is recorded in the sync
@@ -25,17 +52,26 @@ class NotesRepository(
     val pendingCount: Flow<Int> = dao.observePendingCount()
 
     /**
-     * Category folders, sorted alphabetically: those holding notes, plus empty ones the user
-     * created. A folder holding only other files (the shared `img/` folder, say) is not a category,
-     * and neither is the archive tree or a per-note `.assets` folder.
+     * The three tiers of the notes tree: quick notes in the root, pages under [PAGES_DIR] (a single
+     * file or a folder of notes) and tagged notes under [TAGS_DIR] (one sub-folder per tag).
+     * Anything else in the tree is left alone and simply not shown.
      */
-    val categories: Flow<List<String>> = combine(dao.observeDirs(), dao.observeFiles()) { dirs, files ->
-        val noteParents = files.filter { it.isNote }.map { it.parent }.toSet()
-        val candidates = (dirs.map { it.path } + noteParents).distinct().filter { it.isCategory() }
-        candidates
-            .filter { dir -> dir in noteParents || files.none { it.path.startsWith("$dir/") } }
-            .sortedBy { it.lowercase() }
+    val structure: Flow<Structure> = combine(dao.observeNotes(), dao.observeDirs()) { notes, dirs ->
+        val folders = dirs.map { it.path }.filter { !it.endsWith(".assets") }
+        val pageFolders = folders.filter { it.parentPath() == PAGES_DIR }
+        val singles = notes.filter { it.parent == PAGES_DIR }.map { Page.Single(it) }
+        val pages: List<Page> = (singles + pageFolders.map { dir -> Page.Folder(dir, notes.filter { it.parent == dir }) })
+            .sortedBy { it.name.lowercase() }
+        Structure(
+            quick = notes.filter { it.parent.isEmpty() },
+            pages = pages,
+            tags = folders.filter { it.parentPath() == TAGS_DIR }.map { it.substringAfterLast('/') }.sortedBy { it.lowercase() },
+            tagged = notes.filter { it.parent == TAGS_DIR || it.parent.parentPath() == TAGS_DIR },
+        )
     }
+
+    /** The notes of a page folder (or any folder), newest first. */
+    fun notesIn(folder: String): Flow<List<SyncEntry>> = notes.map { list -> list.filter { it.parent == folder } }
 
     fun observe(path: String): Flow<SyncEntry?> = dao.observe(path)
 
@@ -49,8 +85,7 @@ class NotesRepository(
         val mtime = files.write(path, text)
         val current = dao.get(path)
         val state = if (current == null || current.localState == LocalState.NEW) LocalState.NEW else LocalState.MODIFIED
-        val title = NoteText.title(path)
-        val preview = NoteText.preview(text)
+        val (title, preview) = NoteText.index(path, text)
         val size = text.length.toLong()
         // A partial update: the engine may store a fresh ETag on this row while we type, and a
         // full upsert from a stale copy would put the old one back and manufacture a conflict.
@@ -70,27 +105,31 @@ class NotesRepository(
             val f = files.file(e.path)
             if (!f.exists()) continue
             val text = runCatching { f.readText() }.getOrNull() ?: continue
-            val title = NoteText.title(e.path)
-            val preview = NoteText.preview(text)
+            val (title, preview) = NoteText.index(e.path, text)
             if (e.title != title || e.preview != preview || e.modified != f.lastModified()) {
                 dao.upsert(e.copy(title = title, preview = preview, modified = f.lastModified(), size = f.length()))
             }
         }
     }
 
-    /** Creates the folder for a new category and returns its path, or null if the name is taken. */
-    suspend fun createCategory(name: String): String? = withContext(Dispatchers.IO) {
-        val path = NoteText.sanitizeFileName(name)
-        if (path.isEmpty() || path.isArchive()) return@withContext null
-        if (files.exists(path) || dao.get(path) != null) return@withContext null
+    /**
+     * Creates a page folder (`parent` = [PAGES_DIR]) or a tag (`parent` = [TAGS_DIR]) and returns
+     * its path, or null if the name is taken.
+     */
+    suspend fun createFolder(parent: String, name: String): String? = withContext(Dispatchers.IO) {
+        val clean = NoteText.sanitizeFileName(name)
+        if (clean.isEmpty() || clean.endsWith(".assets")) return@withContext null
+        val path = if (parent.isEmpty()) clean else "$parent/$clean"
+        if (files.exists(path) || dao.get(path)?.localState?.let { it != LocalState.DELETED } == true) return@withContext null
+        ensureDir(parent)
         files.mkdir(path)
         dao.upsert(SyncEntry(path, isDir = true, baseEtag = null, localState = LocalState.NEW))
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
         path
     }
 
-    /** Renames a category folder, carrying every note and asset inside it. Returns the new path. */
-    suspend fun renameCategory(path: String, newName: String): String = withContext(Dispatchers.IO) {
+    /** Renames a folder, carrying every note and asset inside it. Returns the new path. */
+    suspend fun renameFolder(path: String, newName: String): String = withContext(Dispatchers.IO) {
         val entry = dao.get(path) ?: return@withContext path
         val clean = NoteText.sanitizeFileName(newName)
         if (clean.isEmpty() || clean == path.substringAfterLast('/')) return@withContext path
@@ -103,42 +142,48 @@ class NotesRepository(
         newPath
     }
 
-    /** What stopped a category from being deleted. */
-    sealed interface CategoryDeletion {
-        data object Deleted : CategoryDeletion
+    /** What stopped a folder from being deleted. */
+    sealed interface FolderDeletion {
+        data object Deleted : FolderDeletion
         /** [remaining] are the files still in the folder, relative to it. */
-        data class NotEmpty(val remaining: List<String>) : CategoryDeletion
+        data class NotEmpty(val remaining: List<String>) : FolderDeletion
     }
 
     /**
-     * Deletes a category, but only when its folder holds nothing at all — notes, images and any
+     * Deletes a page folder or tag, but only when it holds nothing at all — notes, images and any
      * other file count, so nothing is ever removed from the server unnoticed.
      */
-    suspend fun deleteCategory(path: String): CategoryDeletion = withContext(Dispatchers.IO) {
+    suspend fun deleteFolder(path: String): FolderDeletion = withContext(Dispatchers.IO) {
         val dir = files.file(path)
         val onDisk = if (dir.isDirectory) dir.walkTopDown().filter { it.isFile }.map {
             it.relativeTo(dir).path
         }.toList() else emptyList()
         val pending = dao.underPrefix("$path/").filter { it.localState != LocalState.DELETED && !it.isDir }.map { it.path.removePrefix("$path/") }
         val remaining = (onDisk + pending).distinct().sorted()
-        if (remaining.isNotEmpty()) return@withContext CategoryDeletion.NotEmpty(remaining)
+        if (remaining.isNotEmpty()) return@withContext FolderDeletion.NotEmpty(remaining)
         dao.underPrefix("$path/").forEach { markDeleted(it.path) }
         markDeleted(path)
         files.delete(path)
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
-        CategoryDeletion.Deleted
+        FolderDeletion.Deleted
     }
 
-    /** Creates an empty note in [category] (`""` = root) with a unique name and returns its path. */
-    suspend fun create(category: String, title: String = "Untitled", initialText: String = ""): String =
+    /**
+     * Creates a note in [folder] with a unique name and returns its path. In the root (`""`) it is a
+     * quick note named after the moment it was made; elsewhere [title] names the file.
+     */
+    suspend fun create(folder: String, title: String? = null, initialText: String = ""): String =
         withContext(Dispatchers.IO) {
-            ensureDir(category)
-            val path = uniquePath(category, NoteText.sanitizeFileName(title), ".md")
+            ensureDir(folder)
+            val stem = title?.let { NoteText.sanitizeFileName(it) }
+                ?: if (folder.isEmpty()) "note-" + LocalDateTime.now().format(QUICK_STAMP) else "Untitled"
+            val path = uniquePath(folder, stem, ".md")
             val mtime = files.write(path, initialText)
+            val (indexTitle, preview) = NoteText.index(path, initialText)
             dao.upsert(
                 SyncEntry(
                     path, isDir = false, baseEtag = null, localState = LocalState.NEW,
-                    title = NoteText.title(path), preview = NoteText.preview(initialText), modified = mtime,
+                    title = indexTitle, preview = preview, modified = mtime,
                 )
             )
             path
@@ -177,7 +222,8 @@ class NotesRepository(
         // A MOVE would carry the server's old content, so a rewritten note is uploaded fresh instead.
         rekey(path, newPath, isDir = false, allowMove = text == original)
         val moved = dao.get(newPath)!!
-        dao.upsert(moved.copy(title = NoteText.title(newPath), preview = NoteText.preview(text), modified = files.file(newPath).lastModified()))
+        val (indexTitle, preview) = NoteText.index(newPath, text)
+        dao.upsert(moved.copy(title = indexTitle, preview = preview, modified = files.file(newPath).lastModified()))
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
         newPath
     }
@@ -275,10 +321,7 @@ class NotesRepository(
         return File(noteDir, decoded).canonicalFile.takeIf { it.startsWith(files.root.canonicalFile) }
     }
 
-    private fun String.isArchive() = this == ARCHIVE_DIR || startsWith("$ARCHIVE_DIR/")
-
-    private fun String.isCategory() =
-        isNotEmpty() && !isArchive() && !endsWith(".assets") && !contains(".assets/")
+    private fun String.parentPath() = if ('/' in this) substringBeforeLast('/') else ""
 
     fun assetDir(notePath: String): String = notePath.removeSuffix(".md") + ".assets"
 
@@ -338,6 +381,21 @@ class NotesRepository(
 
     companion object {
         const val SAVE_SYNC_DELAY_MS = 1500L
+        const val PAGES_DIR = "Pages"
+        const val TAGS_DIR = "Tags"
+        private val QUICK_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyMMdd-HHmm")
+
+        /** The tag of a note under [TAGS_DIR]: null when it sits directly in the folder (untagged) or elsewhere. */
+        fun tagOf(path: String): String? {
+            val parent = if ('/' in path) path.substringBeforeLast('/') else return null
+            return if (parent.startsWith("$TAGS_DIR/")) parent.removePrefix("$TAGS_DIR/") else null
+        }
+
+        /** The page folder a note is in, or null. */
+        fun pageFolderOf(path: String): String? {
+            val parent = if ('/' in path) path.substringBeforeLast('/') else return null
+            return parent.takeIf { it.startsWith("$PAGES_DIR/") }
+        }
 
         /** Notes under this folder live in the archive space. */
         const val ARCHIVE_DIR = "_archive"
