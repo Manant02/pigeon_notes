@@ -74,6 +74,26 @@ interface SyncDao {
     @Upsert
     suspend fun upsert(entry: SyncEntry)
 
+    /**
+     * Records a local edit without touching [SyncEntry.baseEtag], so it cannot clobber an ETag the
+     * sync engine stored concurrently. Returns 0 when the row does not exist yet.
+     */
+    @Query(
+        "UPDATE entries SET localState = :state, title = :title, preview = :preview, modified = :modified, size = :size " +
+            "WHERE path = :path"
+    )
+    suspend fun markEdited(path: String, state: LocalState, title: String, preview: String, modified: Long, size: Long): Int
+
+    /**
+     * Records a successful upload. The row only becomes CLEAN if no edit landed since the engine
+     * looked at it ([seenModified]); otherwise the newer local content stays pending against the new ETag.
+     */
+    @Query(
+        "UPDATE entries SET baseEtag = :etag, movedFrom = NULL, syncError = NULL, " +
+            "localState = CASE WHEN modified = :seenModified THEN 'CLEAN' ELSE localState END WHERE path = :path"
+    )
+    suspend fun markUploaded(path: String, etag: String?, seenModified: Long)
+
     @Upsert
     suspend fun upsertAll(entries: List<SyncEntry>)
 

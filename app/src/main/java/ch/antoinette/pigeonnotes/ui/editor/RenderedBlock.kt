@@ -181,18 +181,8 @@ private fun ListBlockText(
                     modifier = Modifier
                         .fillMaxWidth()
                         .pointerInput(item) {
-                            detectTapGestures(
-                                onTap = { pos ->
-                                    val off = outputOffset(pos)
-                                    val box = projection.checkboxes.firstOrNull { off in it.start..it.end }
-                                    if (box != null) onToggleCheckbox(box.sourceStart) else onActivate(projection.toSource(off))
-                                },
-                                onLongPress = { pos ->
-                                    val off = outputOffset(pos)
-                                    val link = projection.links.firstOrNull { off in it.start..it.end }
-                                    if (link != null) onOpenLink(link.url) else onActivate(projection.toSource(off))
-                                },
-                            )
+                            // Long press is left to the surrounding SelectionContainer.
+                            detectTapGestures { pos -> tapAt(outputOffset(pos), projection, onActivate, onToggleCheckbox, onOpenLink) }
                         },
                 )
             }
@@ -223,20 +213,22 @@ private fun StyledText(
         modifier = Modifier
             .fillMaxWidth()
             .pointerInput(projection) {
-                detectTapGestures(
-                    onTap = { pos ->
-                        val off = outputOffset(pos)
-                        val box = projection.checkboxes.firstOrNull { off in it.start..it.end }
-                        if (box != null) onToggleCheckbox(box.sourceStart) else onActivate(projection.toSource(off))
-                    },
-                    onLongPress = { pos ->
-                        val off = outputOffset(pos)
-                        val link = projection.links.firstOrNull { off in it.start..it.end }
-                        if (link != null) onOpenLink(link.url) else onActivate(projection.toSource(off))
-                    },
-                )
+                detectTapGestures { pos -> tapAt(outputOffset(pos), projection, onActivate, onToggleCheckbox, onOpenLink) }
             },
     )
+}
+
+/** A tap on a checkbox toggles it, on a link opens it, anywhere else starts editing at that spot. */
+private fun tapAt(
+    off: Int,
+    projection: Projection,
+    onActivate: (Int) -> Unit,
+    onToggleCheckbox: (Int) -> Unit,
+    onOpenLink: (String) -> Unit,
+) {
+    projection.checkboxes.firstOrNull { off in it.start..it.end }?.let { onToggleCheckbox(it.sourceStart); return }
+    projection.links.firstOrNull { off in it.start until it.end }?.let { onOpenLink(it.url); return }
+    onActivate(projection.toSource(off))
 }
 
 @Composable

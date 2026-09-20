@@ -154,4 +154,15 @@ class MarkdownTest {
         assertEquals("a link here", NoteText.preview("- [a link](http://x) here\n"))
         assertEquals("quoted", NoteText.preview("> quoted\n"))
     }
+
+    @Test
+    fun `display math on its own lines is one block, blank lines inside included`() {
+        val doc = "Intro\n\n$$\n\n\\frac{d}{dt} H = -ih\n\n$$\n\nAfter\n\n```\n$$\nnot math\n$$\n```\n"
+        val blocks = BlockParser.parse(doc)
+        assertEquals(listOf(BlockKind.PARAGRAPH, BlockKind.MATH, BlockKind.PARAGRAPH, BlockKind.CODE), blocks.map { it.kind })
+        assertEquals("$$\n\n\\frac{d}{dt} H = -ih\n\n$$", blocks[1].source)
+        assertEquals("After", blocks[2].source)
+        // An unclosed $$ stays ordinary text.
+        assertTrue(BlockParser.parse("$$\nx\n\ntext\n").none { it.kind == BlockKind.MATH })
+    }
 }

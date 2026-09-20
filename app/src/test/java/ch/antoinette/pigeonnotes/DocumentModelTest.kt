@@ -177,4 +177,116 @@ class DocumentModelTest {
         assertEquals("One more\n", m.currentText())
         assertTrue("doc only changes on commit", m.doc == "One\n")
     }
+
+    // ---- Backspace at the start of a line with text -------------------------------------------
+
+    @Test
+    fun `backspace at the start after a formula removes the blank line and lands on the formula`() {
+        val m = model("$$\nx\n$$\n\n\nText\n")
+        // the extra blank line between formula and text is an EMPTY block
+        assertEquals(listOf(BlockKind.MATH, BlockKind.EMPTY, BlockKind.PARAGRAPH), m.blocks.map { it.kind })
+        m.activate(2, 0)
+        m.joinWithPrevious()
+        assertEquals("$$\nx\n$$\n\nText\n", m.doc)
+        assertEquals("Text", m.active!!.field.text.toString())
+        assertEquals(0, m.active!!.field.selection.start)
+
+        // No blank line left: the cursor moves onto the formula, its source untouched.
+        m.joinWithPrevious()
+        assertEquals("$$\nx\n$$\n\nText\n", m.doc)
+        assertEquals(BlockKind.MATH, m.active!!.kind)
+        assertEquals("$$\nx\n$$".length, m.active!!.field.selection.start)
+    }
+
+    @Test
+    fun `backspace at the start of a paragraph joins it to the list above`() {
+        val m = model("- a\n- b\n\ntext\n")
+        m.activate(1, 0)
+        m.joinWithPrevious()
+        assertEquals("- a\n- btext\n", m.doc)
+        assertEquals(BlockKind.LIST, m.active!!.kind)
+        assertEquals("- a\n- b".length, m.active!!.field.selection.start)
+    }
+
+    @Test
+    fun `backspace at the start of an empty line after a list still removes the line`() {
+        val m = model("- a\n\n\ntext\n")
+        m.activate(1, 0) // the EMPTY block
+        m.joinWithPrevious()
+        assertEquals("- a\n\ntext\n", m.doc)
+        assertEquals(BlockKind.LIST, m.active!!.kind)
+    }
+
+    @Test
+    fun `backspace at the start of the first block does nothing`() {
+        val m = model("One\n\nTwo\n")
+        m.activate(0, 0)
+        m.joinWithPrevious()
+        assertEquals("One\n\nTwo\n", m.doc)
+        assertEquals(0, m.active!!.index)
+    }
+
+    // ---- undo / redo ---------------------------------------------------------------------------
+
+    private class Clock(var now: Long = 0L) : () -> Long {
+        override fun invoke() = now
+    }
+
+    @Test
+    fun `typing undoes in groups and structural edits are separate steps`() {
+        val clock = Clock()
+        val m = DocumentModel("One\n\nTwo\n", clock = clock)
+        m.activate(0, 3)
+        for (c in "abc") {
+            m.active!!.field.edit { append(c.toString()) }
+            m.onTyped(); clock.now += 100
+        }
+        clock.now += 5_000
+        m.active!!.field.edit { append("d") }
+        m.onTyped()
+        m.splitActive(m.active!!.field.text.length) // Enter at the end
+        assertEquals("Oneabcd\n\n\nTwo\n", m.doc)
+        assertTrue(m.canUndo)
+
+        m.undo()
+        assertEquals("Oneabcd\n\nTwo\n", m.currentText())
+        m.undo()
+        assertEquals("Oneabc\n\nTwo\n", m.currentText())
+        assertEquals("cursor sits where the text differs", 6, m.active!!.field.selection.start)
+        m.undo()
+        assertEquals("One\n\nTwo\n", m.currentText())
+        assertTrue(!m.canUndo)
+        assertTrue(m.canRedo)
+
+        m.redo()
+        assertEquals("Oneabc\n\nTwo\n", m.currentText())
+        m.redo(); m.redo()
+        assertEquals("Oneabcd\n\n\nTwo\n", m.currentText())
+        assertTrue(!m.canRedo)
+    }
+
+    @Test
+    fun `a new edit after undo drops the redo history`() {
+        val m = DocumentModel("One\n")
+        m.toggleCheckbox(0, 0) // no-op: not a checkbox
+        m.activate(0, 3)
+        m.active!!.field.edit { append("!") }; m.onTyped()
+        m.undo()
+        assertTrue(m.canRedo)
+        m.activate(0, 0)
+        m.active!!.field.edit { replace(0, 0, "?") }; m.onTyped()
+        assertTrue(!m.canRedo)
+        assertEquals("?One\n", m.currentText())
+    }
+
+    @Test
+    fun `checkbox toggles are undoable and load resets the history`() {
+        val m = DocumentModel("- [ ] a\n")
+        m.toggleCheckbox(0, 2)
+        assertEquals("- [x] a\n", m.doc)
+        m.undo()
+        assertEquals("- [ ] a\n", m.doc)
+        m.load("fresh\n")
+        assertTrue(!m.canUndo && !m.canRedo)
+    }
 }

@@ -164,6 +164,45 @@ class SyncEngineTest {
     }
 
     @Test
+    fun `deleting a note removes its assets folder only when no sibling note links into it`() {
+        dav.putFile("Main/Trip.md", "![p](Trip.assets/p.png)")
+        dav.putFile("Main/Trip.assets/p.png", "PNG")
+        dav.putFile("Main/Trip (conflict 2026-09-20 10-00).md", "![p](Trip.assets/p.png) more")
+        dav.putFile("Main/Other.md", "![q](../Trip.assets/p.png)") // wrong folder: does not count
+        sync()
+
+        runBlocking { repo.delete("Main/Trip.md") }
+        assertTrue("the conflict copy still needs the pictures", files.exists("Main/Trip.assets/p.png"))
+        sync()
+        assertNotNull(dav.text("Main/Trip.assets/p.png"))
+        assertNull(dav.text("Main/Trip.md"))
+
+        // Deleting the last note that links to the folder takes the folder with it.
+        runBlocking { repo.delete("Main/Trip (conflict 2026-09-20 10-00).md") }
+        assertFalse(files.exists("Main/Trip.assets"))
+        sync()
+        assertNull(dav.text("Main/Trip.assets/p.png"))
+        assertNull(runBlocking { dao.get("Main/Trip.assets") })
+    }
+
+    @Test
+    fun `renaming a note leaves a shared assets folder in place`() {
+        dav.putFile("Old.md", "![p](Old.assets/p.png)")
+        dav.putFile("Old.assets/p.png", "PNG")
+        dav.putFile("Old (conflict 2026-09-20 10-00).md", "![p](Old.assets/p.png)")
+        sync()
+
+        val newPath = runBlocking { repo.rename("Old.md", "New") }
+        assertEquals("New.md", newPath)
+        assertEquals("links are not rewritten", "![p](Old.assets/p.png)", files.read("New.md"))
+        assertTrue(files.exists("Old.assets/p.png"))
+        assertFalse(files.exists("New.assets"))
+        sync()
+        assertNotNull(dav.text("Old.assets/p.png"))
+        assertTrue(dav.requests.contains("MOVE Old.md"))
+    }
+
+    @Test
     fun `inserted asset lands in the note's assets folder and links are encoded`() {
         sync()
         val note = runBlocking { repo.create("", "My note", "text\n") }
@@ -173,6 +212,49 @@ class SyncEngineTest {
         assertEquals(File(files.root, "My note.assets/photo 1.png"), repo.resolveLink(note, link))
         sync()
         assertNotNull(dav.nodes["My note.assets/photo 1.png"])
+    }
+
+    @Test
+    fun `an edit that lands during the upload stays pending and does not conflict`() {
+        dav.putFile("A.md", "one")
+        sync()
+        runBlocking { repo.save("A.md", "one two") }
+
+        // While the bytes of "one two" are in flight the user keeps typing; the file's mtime must move.
+        dav.duringPut = { path ->
+            if (path == "A.md") {
+                Thread.sleep(5)
+                runBlocking { repo.save("A.md", "one two three") }
+            }
+        }
+        sync()
+        dav.duringPut = null
+
+        assertEquals("one two", dav.text("A.md"))
+        val row = runBlocking { dao.get("A.md") }!!
+        assertEquals("newer local text must still be pending", LocalState.MODIFIED, row.localState)
+        assertEquals("but against the ETag the server now has", dav.nodes["A.md"]!!.etag, row.baseEtag)
+
+        dav.requests.clear()
+        sync()
+        assertEquals("one two three", dav.text("A.md"))
+        assertTrue(dav.requests.none { it.startsWith("GET") })
+        assertTrue(files.root.list().orEmpty().none { "conflict" in it })
+        assertEquals(LocalState.CLEAN, runBlocking { dao.get("A.md") }!!.localState)
+    }
+
+    @Test
+    fun `a sync requested while a note is held runs on release`() {
+        dav.putFile("A.md", "one")
+        sync()
+        engine.hold()
+        runBlocking { repo.save("A.md", "edited while open") }
+        assertEquals(SyncStatus.Idle, sync())
+        assertEquals("one", dav.text("A.md"))
+        engine.release()
+        // release() schedules the sync on the engine's (Unconfined) scope
+        Thread.sleep(300)
+        assertEquals("edited while open", dav.text("A.md"))
     }
 
     @Test

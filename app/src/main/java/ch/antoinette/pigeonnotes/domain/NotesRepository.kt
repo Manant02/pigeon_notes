@@ -49,15 +49,14 @@ class NotesRepository(
         val mtime = files.write(path, text)
         val current = dao.get(path)
         val state = if (current == null || current.localState == LocalState.NEW) LocalState.NEW else LocalState.MODIFIED
-        dao.upsert(
-            (current ?: SyncEntry(path, isDir = false, baseEtag = null, localState = LocalState.NEW)).copy(
-                localState = state,
-                title = NoteText.title(path),
-                preview = NoteText.preview(text),
-                modified = mtime,
-                size = text.length.toLong(),
-            )
-        )
+        val title = NoteText.title(path)
+        val preview = NoteText.preview(text)
+        val size = text.length.toLong()
+        // A partial update: the engine may store a fresh ETag on this row while we type, and a
+        // full upsert from a stale copy would put the old one back and manufacture a conflict.
+        if (dao.markEdited(path, state, title, preview, mtime, size) == 0) {
+            dao.upsert(SyncEntry(path, isDir = false, baseEtag = null, localState = LocalState.NEW, title = title, preview = preview, modified = mtime, size = size))
+        }
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
     }
 
@@ -164,7 +163,8 @@ class NotesRepository(
         val newAssets = assetDir(newPath)
         val original = files.read(path)
         var text = original
-        if (files.exists(oldAssets)) {
+        // Another note in the folder (typically a conflict copy) may share the assets: then they stay put.
+        if (files.exists(oldAssets) && !referencedByOtherNotes(oldAssets, except = path)) {
             val (oldPrefix, newPrefix) = assetLinkPrefix(oldAssets) to assetLinkPrefix(newAssets)
             text = text
                 .replace(encodeLink(oldPrefix), encodeLink(newPrefix))
@@ -182,18 +182,67 @@ class NotesRepository(
         newPath
     }
 
-    /** Deletes a note and its assets folder locally; the deletion is propagated on the next sync. */
+    /**
+     * Deletes a note locally; the deletion is propagated on the next sync. Assets folders the note
+     * used (its own and any other `*.assets` in the same folder it links to) go with it, unless
+     * another note in that folder still references them.
+     */
     suspend fun delete(path: String) = withContext(Dispatchers.IO) {
+        val text = if (files.exists(path)) files.read(path) else ""
         markDeleted(path)
-        val assets = assetDir(path)
-        if (files.exists(assets)) {
+        files.delete(path)
+        val candidates = (listOf(assetDir(path)) + assetDirsIn(entryParent(path)).filter { references(text, it) }).distinct()
+        for (assets in candidates) {
+            if (!files.exists(assets) || referencedByOtherNotes(assets, except = path)) continue
             dao.underPrefix("$assets/").forEach { markDeleted(it.path) }
             markDeleted(assets)
             files.delete(assets)
         }
-        files.delete(path)
         sync.requestSync(delayMillis = SAVE_SYNC_DELAY_MS)
     }
+
+    /** `*.assets` folders that exist in [dir] (`""` = root). */
+    private fun assetDirsIn(dir: String): List<String> {
+        val prefix = if (dir.isEmpty()) "" else "$dir/"
+        return files.file(dir).listFiles().orEmpty()
+            .filter { it.isDirectory && it.name.endsWith(".assets") }
+            .map { prefix + it.name }
+    }
+
+    /** True if any note in the folder of [assetDirPath], other than [except], links into it. */
+    private fun referencedByOtherNotes(assetDirPath: String, except: String): Boolean {
+        val dir = entryParent(assetDirPath)
+        return files.file(dir).listFiles().orEmpty().any { f ->
+            val rel = (if (dir.isEmpty()) "" else "$dir/") + f.name
+            f.isFile && f.name.endsWith(".md", ignoreCase = true) && rel != except &&
+                references(runCatching { f.readText() }.getOrDefault(""), assetDirPath)
+        }
+    }
+
+    /**
+     * True if [text] links into the folder at [assetDirPath], i.e. contains `Name.assets/` (raw or
+     * percent-encoded) as the start of a relative path — `../Name.assets/` or `MyName.assets/` do not count.
+     */
+    private fun references(text: String, assetDirPath: String): Boolean {
+        val prefix = assetLinkPrefix(assetDirPath)
+        for (needle in listOf(prefix, encodeLink(prefix)).distinct()) {
+            var i = text.indexOf(needle)
+            while (i >= 0) {
+                if (startsPath(text, i)) return true
+                i = text.indexOf(needle, i + 1)
+            }
+        }
+        return false
+    }
+
+    private fun startsPath(text: String, at: Int): Boolean {
+        if (at == 0) return true
+        val prev = text[at - 1]
+        if (prev == '/') return at >= 2 && text[at - 2] == '.' && (at < 3 || text[at - 3] != '.')
+        return !(prev.isLetterOrDigit() || prev == '_' || prev == '-' || prev == '.' || prev == '%')
+    }
+
+    private fun entryParent(path: String) = if ('/' in path) path.substringBeforeLast('/') else ""
 
     /**
      * Stores [bytes] as an asset of the note at [notePath] and returns the relative link to put in

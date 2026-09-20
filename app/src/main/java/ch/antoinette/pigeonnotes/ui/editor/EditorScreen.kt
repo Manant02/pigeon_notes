@@ -20,6 +20,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
@@ -71,6 +73,12 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     var moving by remember { mutableStateOf(false) }
     val categories by vm.categories.collectAsStateWithLifecycle(emptyList())
 
+    // No sync while the note is open; whatever was requested meanwhile runs when the screen closes.
+    DisposableEffect(vm) {
+        vm.holdSync()
+        onDispose { vm.releaseSync() }
+    }
+
     // Save when the app goes to the background.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -107,12 +115,18 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                     IconButton(onClick = { vm.document.commit(); vm.flush(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
-                    IconButton(onClick = { renaming = true }) { Icon(Icons.Default.Edit, "Rename") }
+                    IconButton(onClick = vm::undo, enabled = vm.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo") }
+                    IconButton(onClick = vm::redo, enabled = vm.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo") }
                     IconButton(onClick = { vm.toggleSourceMode() }) {
                         Icon(Icons.Default.Code, "Source", tint = if (vm.sourceMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            onClick = { menuOpen = false; renaming = true },
+                        )
                         DropdownMenuItem(
                             text = { Text("Move to category…") },
                             leadingIcon = { Icon(Icons.Outlined.DriveFileMove, null) },

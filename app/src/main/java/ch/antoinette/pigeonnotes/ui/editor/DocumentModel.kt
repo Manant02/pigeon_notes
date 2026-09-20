@@ -30,7 +30,11 @@ class ActiveBlock(
  *
  * @param onChanged called whenever the document text changes, to schedule a save
  */
-class DocumentModel(initial: String = "", private val onChanged: () -> Unit = {}) {
+class DocumentModel(
+    initial: String = "",
+    private val onChanged: () -> Unit = {},
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
     var doc by mutableStateOf("")
         private set
     var blocks by mutableStateOf<List<Block>>(emptyList())
@@ -38,15 +42,85 @@ class DocumentModel(initial: String = "", private val onChanged: () -> Unit = {}
     var active by mutableStateOf<ActiveBlock?>(null)
         private set
 
+    // ---- undo history: whole-document snapshots, keystrokes coalesced while typing goes on ----
+    private val undoStack = ArrayDeque<String>()
+    private val redoStack = ArrayDeque<String>()
+    /** The text as of the last recorded change; what the next change pushes onto the undo stack. */
+    private var lastText = ""
+    private var lastTypedAt = 0L
+    private var typing = false
+    var canUndo by mutableStateOf(false)
+        private set
+    var canRedo by mutableStateOf(false)
+        private set
+
     init {
-        setDoc(initial, notify = false)
+        load(initial)
+    }
+
+    /** Loads a fresh document (opening a note, or after a rename rewrote its links); history starts over. */
+    fun load(text: String) {
+        active = null
+        setDoc(text, notify = false)
+        undoStack.clear(); redoStack.clear()
+        lastText = currentText(); typing = false
+        canUndo = false; canRedo = false
     }
 
     /** Replaces the whole document, e.g. after loading or leaving source mode. */
     fun setDoc(text: String, notify: Boolean = true) {
         doc = text
         blocks = BlockParser.parse(text)
-        if (notify) onChanged()
+        if (notify) {
+            record(typedNow = false)
+            onChanged()
+        }
+    }
+
+    /** Called on every keystroke in the active block, so typing becomes undoable in groups. */
+    fun onTyped() = record(typedNow = true)
+
+    private fun record(typedNow: Boolean) {
+        val text = currentText()
+        if (text == lastText) return
+        val now = clock()
+        val continuesGroup = typedNow && typing && now - lastTypedAt < TYPING_GROUP_MS
+        if (!continuesGroup) {
+            undoStack.addLast(lastText)
+            while (undoStack.size > HISTORY_LIMIT) undoStack.removeFirst()
+            redoStack.clear()
+        }
+        lastText = text
+        typing = typedNow
+        lastTypedAt = now
+        canUndo = undoStack.isNotEmpty(); canRedo = false
+    }
+
+    fun undo() {
+        val target = undoStack.removeLastOrNull() ?: return
+        redoStack.addLast(currentText())
+        restore(target)
+    }
+
+    fun redo() {
+        val target = redoStack.removeLastOrNull() ?: return
+        undoStack.addLast(currentText())
+        restore(target)
+    }
+
+    /** Puts [text] in place and the cursor where it first differs from what was there. */
+    private fun restore(text: String) {
+        val current = currentText()
+        val at = current.commonPrefixWith(text).length.coerceAtMost(text.length)
+        active = null
+        doc = text
+        blocks = BlockParser.parse(text)
+        lastText = text; typing = false
+        canUndo = undoStack.isNotEmpty(); canRedo = redoStack.isNotEmpty()
+        onChanged()
+        val idx = blocks.indexOfLast { it.start <= at }
+        if (idx >= 0 && at <= blocks[idx].end) activateExisting(idx, at - blocks[idx].start)
+        else if (idx >= 0) activateExisting(idx, blocks[idx].source.length)
     }
 
     /** Document text including whatever is typed in the active block, normalised to one trailing newline. */
@@ -231,6 +305,49 @@ class DocumentModel(initial: String = "", private val onChanged: () -> Unit = {}
         if (idx >= 0) activateExisting(idx, blocks[idx].source.length)
     }
 
+    /**
+     * Backspace at the very start of the active block. An empty line is removed ([deleteEmptyActive]);
+     * otherwise the block joins the one above: a blank line above disappears, text-like blocks
+     * (paragraph, heading, list, quote) take the text in, and anything else (formula, code, image,
+     * table, rule) just receives the cursor at its end.
+     */
+    fun joinWithPrevious() {
+        val a = active ?: return
+        val text = a.field.text.toString()
+        if (text.isEmpty()) {
+            deleteEmptyActive(); return
+        }
+        if (a.kind == BlockKind.EMPTY || a.virtual) {
+            // Text typed on an empty line is a paragraph in the making: materialise it, then join.
+            val pos = a.start
+            commit()
+            val idx = blocks.indexOfFirst { it.start == pos }
+            if (idx < 0) return
+            activateExisting(idx, 0)
+            joinWithPrevious()
+            return
+        }
+        if (a.index == 0) return
+        val prev = blocks[a.index - 1]
+        active = null
+        when (prev.kind) {
+            BlockKind.EMPTY -> {
+                setDoc(doc.replaceRange(a.start, a.end, text).removeRange(prev.start, prev.start + 1))
+                val idx = blocks.indexOfFirst { it.start == a.start - 1 }
+                if (idx >= 0) activateExisting(idx, 0)
+            }
+            BlockKind.PARAGRAPH, BlockKind.HEADING, BlockKind.LIST, BlockKind.QUOTE, BlockKind.ALERT -> {
+                setDoc(doc.replaceRange(prev.start, a.end, prev.source + text))
+                val idx = blocks.indexOfFirst { it.start == prev.start }
+                if (idx >= 0) activateExisting(idx, prev.source.length)
+            }
+            else -> {
+                if (text != doc.substring(a.start, a.end)) setDoc(doc.replaceRange(a.start, a.end, text))
+                activateExisting(a.index - 1, prev.source.length)
+            }
+        }
+    }
+
     /** Flips a `[ ]`/`[x]` in block [blockIndex] at [sourceOffset] without opening the block for editing. */
     fun toggleCheckbox(blockIndex: Int, sourceOffset: Int) {
         commit()
@@ -249,10 +366,17 @@ class DocumentModel(initial: String = "", private val onChanged: () -> Unit = {}
                 replace(selection.start, selection.end, markdown)
                 placeCursorAfterCharAt((start + markdown.length - 1).coerceIn(0, length - 1))
             }
+            record(typedNow = false)
             onChanged()
         } else {
             val trimmed = doc.trimEnd('\n')
             setDoc(if (trimmed.isEmpty()) "$markdown\n" else "$trimmed\n\n$markdown\n")
         }
+    }
+
+    companion object {
+        /** Keystrokes closer together than this undo as one step. */
+        const val TYPING_GROUP_MS = 1_000L
+        const val HISTORY_LIMIT = 200
     }
 }

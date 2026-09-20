@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -40,6 +41,7 @@ class Settings(private val context: Context) : AccountSource {
         val notesRoot = stringPreferencesKey("notes_root")
         val lastSync = longPreferencesKey("last_sync")
         val tileView = booleanPreferencesKey("tile_view")
+        val recentCount = intPreferencesKey("recent_count")
         val categoryOrder = stringPreferencesKey("category_order")
         val pinnedCategories = stringPreferencesKey("pinned_categories")
         val categoryColors = stringPreferencesKey("category_colors")
@@ -55,6 +57,13 @@ class Settings(private val context: Context) : AccountSource {
 
     suspend fun setTileView(enabled: Boolean) {
         context.dataStore.edit { it[Keys.tileView] = enabled }
+    }
+
+    /** How many recent notes the home screen shows; always even, since they sit two per row. */
+    val recentCount: Flow<Int> = context.dataStore.data.map { it[Keys.recentCount] ?: DEFAULT_RECENT_COUNT }
+
+    suspend fun setRecentCount(count: Int) {
+        context.dataStore.edit { it[Keys.recentCount] = count.coerceIn(RECENT_COUNT_OPTIONS.first(), RECENT_COUNT_OPTIONS.last()).let { c -> c - c % 2 } }
     }
 
     suspend fun setCategoryOrder(order: List<String>) {
@@ -138,5 +147,10 @@ class Settings(private val context: Context) : AccountSource {
         val user = this[Keys.loginName] ?: return null
         val pw = this[Keys.appPassword] ?: return null
         return Account(url, user, pw, this[Keys.notesRoot] ?: "/Notes")
+    }
+
+    companion object {
+        const val DEFAULT_RECENT_COUNT = 4
+        val RECENT_COUNT_OPTIONS = listOf(2, 4, 6, 8)
     }
 }

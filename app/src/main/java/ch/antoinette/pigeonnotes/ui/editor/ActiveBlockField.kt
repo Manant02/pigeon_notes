@@ -50,7 +50,7 @@ fun ActiveBlockField(
     onTextChanged: () -> Unit,
     onSplit: (cursor: Int) -> Unit,
     onLeaveList: (lineStart: Int, lineEnd: Int) -> Unit,
-    onDeleteEmpty: () -> Unit,
+    onBackspaceAtStart: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
     val output = remember(active, palette) { MarkdownOutputTransformation(active.kind, active.level, palette) }
@@ -68,10 +68,11 @@ fun ActiveBlockField(
                 .fillMaxWidth()
                 .focusRequester(focus)
                 .onPreviewKeyEvent { e ->
-                    // Backspace in an empty line removes the line (Typora); IMEs that only send
-                    // deleteSurroundingText never reach here, which is harmless.
-                    if (e.type == KeyEventType.KeyDown && e.key == Key.Backspace && active.field.text.isEmpty()) {
-                        onDeleteEmpty(); true
+                    // Backspace with nothing before the cursor joins the line above (Typora). IMEs send
+                    // a key event exactly then, since there is no text for deleteSurroundingText to eat.
+                    val sel = active.field.selection
+                    if (e.type == KeyEventType.KeyDown && e.key == Key.Backspace && sel.collapsed && sel.start == 0) {
+                        onBackspaceAtStart(); true
                     } else false
                 },
             textStyle = blockTextStyle(active.kind, active.level, palette),

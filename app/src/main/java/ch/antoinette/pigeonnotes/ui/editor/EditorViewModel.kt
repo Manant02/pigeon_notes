@@ -1,5 +1,6 @@
 package ch.antoinette.pigeonnotes.ui.editor
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -15,6 +16,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /** Editing one note: the [DocumentModel] plus persistence, renaming, archiving and asset insertion. */
+@OptIn(ExperimentalFoundationApi::class)
 class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewModel() {
     val document = DocumentModel(onChanged = ::scheduleSave)
 
@@ -45,16 +47,37 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
         viewModelScope.launch {
             val text = graph.notes.read(initialPath)
             lastSaved = text
-            document.setDoc(text, notify = false)
+            document.load(text)
             loaded = true
             if (text.isBlank()) document.activateAtEnd()
         }
     }
 
+    // ---- sync hold ------------------------------------------------------------------------------
+
+    fun holdSync() = graph.syncEngine.hold()
+
+    /** Flushes first so the sync that follows the release carries the latest text. */
+    fun releaseSync() {
+        flush()
+        graph.syncEngine.release()
+    }
+
     // ---- saving ---------------------------------------------------------------------------------
 
     /** Called on every keystroke in the active field (or in source mode). */
-    fun onTextChanged() = scheduleSave()
+    fun onTextChanged() {
+        if (!sourceMode) document.onTyped()
+        scheduleSave()
+    }
+
+    // ---- undo / redo ----------------------------------------------------------------------------
+
+    val canUndo: Boolean get() = if (sourceMode) sourceField.undoState.canUndo else document.canUndo
+    val canRedo: Boolean get() = if (sourceMode) sourceField.undoState.canRedo else document.canRedo
+
+    fun undo() = if (sourceMode) sourceField.undoState.undo() else document.undo()
+    fun redo() = if (sourceMode) sourceField.undoState.redo() else document.redo()
 
     private fun scheduleSave() {
         saveJob?.cancel()
@@ -112,7 +135,7 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
             // links to the assets folder may have been rewritten
             val text = graph.notes.read(newPath)
             lastSaved = text
-            if (text != currentText()) document.setDoc(text, notify = false)
+            if (text != currentText()) document.load(text)
         }
     }
 

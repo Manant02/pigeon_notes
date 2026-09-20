@@ -50,6 +50,8 @@ class SyncEngine(
     private val mutex = Mutex()
     private var rerunRequested = false
     private var debounceJob: Job? = null
+    private var holds = 0
+    private var deferred = false
 
     private val _status = MutableStateFlow<SyncStatus>(SyncStatus.Idle)
     val status: StateFlow<SyncStatus> = _status
@@ -59,6 +61,9 @@ class SyncEngine(
 
     /** Schedule a sync; repeated calls within [delayMillis] collapse into one run. */
     fun requestSync(delayMillis: Long = 0) {
+        if (holds > 0) {
+            deferred = true; return
+        }
         debounceJob?.cancel()
         debounceJob = scope.launch {
             if (delayMillis > 0) delay(delayMillis)
@@ -66,8 +71,28 @@ class SyncEngine(
         }
     }
 
+    /**
+     * Suspends syncing while a note is open for editing, so a half-typed note is neither uploaded
+     * mid-sentence nor overwritten by a download. Every request made meanwhile runs on [release].
+     */
+    fun hold() {
+        holds++
+    }
+
+    fun release() {
+        holds = (holds - 1).coerceAtLeast(0)
+        if (holds == 0 && deferred) {
+            deferred = false
+            requestSync()
+        }
+    }
+
     /** Runs one full sync. Safe to call concurrently: a second caller queues one re-run. */
     suspend fun sync(): SyncStatus {
+        if (holds > 0) {
+            deferred = true
+            return _status.value
+        }
         if (mutex.isLocked) {
             rerunRequested = true
             return _status.value
@@ -256,10 +281,14 @@ class SyncEngine(
                 drop(path); return
             }
             _status.value = SyncStatus.Syncing("Uploading $path")
+            // The row may have been edited since the pass started; take its current shape so the
+            // CLEAN mark below only applies if nothing changed while the bytes were in flight.
+            val seen = dao.get(path) ?: entry
             try {
                 val etag = dav.upload(path, f, ifMatch, ifNoneMatch, f.lastModified(), contentTypeFor(path))
                 stats.uploaded++
-                save(entry.copy(localState = LocalState.CLEAN, baseEtag = etag ?: fetchEtag(path), movedFrom = null, syncError = null))
+                dao.markUploaded(path, etag ?: fetchEtag(path), seen.modified)
+                dao.get(path)?.let { local[path] = it }
                 log("$path: uploaded")
             } catch (e: DavException) {
                 if (e.isPreconditionFailed) conflict(path, entry, fetchEtag(path)) else throw e

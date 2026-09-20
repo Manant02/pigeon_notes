@@ -61,6 +61,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import ch.antoinette.pigeonnotes.AppGraph
+import ch.antoinette.pigeonnotes.data.local.Settings
 import ch.antoinette.pigeonnotes.ui.graphViewModel
 import ch.antoinette.pigeonnotes.domain.NotesRepository
 import ch.antoinette.pigeonnotes.ui.notes.CategoryAccent
@@ -73,6 +74,7 @@ import kotlinx.coroutines.launch
 
 class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
     val tileView = graph.settings.tileView
+    val recentCount = graph.settings.recentCount
 
     /** Every category, in the user's saved order. */
     val categories: Flow<List<String>> = combine(graph.notes.categories, graph.settings.categoryOrder) { all, order ->
@@ -87,6 +89,10 @@ class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
 
     fun setTileView(enabled: Boolean) {
         viewModelScope.launch { graph.settings.setTileView(enabled) }
+    }
+
+    fun setRecentCount(count: Int) {
+        viewModelScope.launch { graph.settings.setRecentCount(count) }
     }
 
     fun setCategoryOrder(order: List<String>) {
@@ -136,6 +142,7 @@ fun AppSettingsScreen(
     vm: AppSettingsViewModel = graphViewModel { AppSettingsViewModel(it) },
 ) {
     val tiles by vm.tileView.collectAsStateWithLifecycle(false)
+    val recentCount by vm.recentCount.collectAsStateWithLifecycle(Settings.DEFAULT_RECENT_COUNT)
     val categories by vm.categories.collectAsStateWithLifecycle(emptyList())
     val notEmpty by vm.notEmpty.collectAsStateWithLifecycle()
     var reordering by remember { mutableStateOf(false) }
@@ -183,6 +190,23 @@ fun AppSettingsScreen(
                             icon = {},
                             label = { Icon(Icons.Outlined.GridView, "Tiles") },
                         )
+                    }
+                },
+            )
+            ListItem(
+                headlineContent = { Text("Recent notes on home") },
+                supportingContent = { Text("$recentCount notes, two per row") },
+                trailingContent = {
+                    SingleChoiceSegmentedButtonRow {
+                        Settings.RECENT_COUNT_OPTIONS.forEachIndexed { i, n ->
+                            SegmentedButton(
+                                selected = recentCount == n,
+                                onClick = { vm.setRecentCount(n) },
+                                shape = SegmentedButtonDefaults.itemShape(index = i, count = Settings.RECENT_COUNT_OPTIONS.size),
+                                icon = {},
+                                label = { Text("$n") },
+                            )
+                        }
                     }
                 },
             )

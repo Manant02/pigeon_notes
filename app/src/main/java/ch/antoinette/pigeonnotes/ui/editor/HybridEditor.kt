@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
@@ -36,43 +37,47 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
         if (visible.none { it.index == a.index }) listState.animateScrollToItem(a.index)
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } },
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 240.dp),
-    ) {
-        items(count = count, key = { i -> if (i < blocks.size) "${blocks[i].start}:${blocks[i].kind}" else "virtual" }) { i ->
-            val a = active
-            val block = blocks.getOrNull(i)
-            val editing = a != null && a.index == i
+    // Rendered blocks are selectable together (long-press and drag), so a passage spanning several
+    // blocks can be copied; the block being edited keeps the text field's own selection.
+    SelectionContainer(modifier) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } },
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 240.dp),
+        ) {
+            items(count = count, key = { i -> if (i < blocks.size) "${blocks[i].start}:${blocks[i].kind}" else "virtual" }) { i ->
+                val a = active
+                val block = blocks.getOrNull(i)
+                val editing = a != null && a.index == i
 
-            Box(Modifier.fillMaxWidth().padding(vertical = spacingFor(block?.kind))) {
-                if (editing && a != null) {
-                    ActiveBlockField(
-                        active = a,
-                        palette = palette,
-                        onTextChanged = vm::onTextChanged,
-                        onSplit = doc::splitActive,
-                        onLeaveList = doc::leaveListActive,
-                        onDeleteEmpty = doc::deleteEmptyActive,
-                    )
-                } else if (block != null) {
-                    RenderedBlock(
-                        block = block,
-                        palette = palette,
-                        resolveLink = vm::resolveLink,
-                        onActivate = { offset -> doc.activate(i, offset) },
-                        onToggleCheckbox = { offset -> doc.toggleCheckbox(i, offset) },
-                        onOpenLink = onOpenLink,
-                    )
+                Box(Modifier.fillMaxWidth().padding(vertical = spacingFor(block?.kind))) {
+                    if (editing && a != null) {
+                        ActiveBlockField(
+                            active = a,
+                            palette = palette,
+                            onTextChanged = vm::onTextChanged,
+                            onSplit = doc::splitActive,
+                            onLeaveList = doc::leaveListActive,
+                            onBackspaceAtStart = doc::joinWithPrevious,
+                        )
+                    } else if (block != null) {
+                        RenderedBlock(
+                            block = block,
+                            palette = palette,
+                            resolveLink = vm::resolveLink,
+                            onActivate = { offset -> doc.activate(i, offset) },
+                            onToggleCheckbox = { offset -> doc.toggleCheckbox(i, offset) },
+                            onOpenLink = onOpenLink,
+                        )
+                    }
                 }
             }
-        }
-        item(key = "tail") {
-            // Extra tap target so a short note can still be appended to comfortably.
-            Box(Modifier.fillMaxWidth().height(120.dp).pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } })
+            item(key = "tail") {
+                // Extra tap target so a short note can still be appended to comfortably.
+                Box(Modifier.fillMaxWidth().height(120.dp).pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } })
+            }
         }
     }
 }

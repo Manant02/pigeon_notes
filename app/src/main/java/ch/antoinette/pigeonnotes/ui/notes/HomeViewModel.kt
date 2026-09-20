@@ -36,14 +36,14 @@ class HomeViewModel(private val graph: AppGraph) : ViewModel() {
     val state: StateFlow<HomeUiState> = combine(
         graph.notes.notes,
         graph.notes.categories,
-        combine(graph.settings.pinnedCategories, graph.settings.categoryColors, graph.settings.categoryOrder) { pinned, colors, order ->
-            Triple(pinned, colors, order)
+        combine(graph.settings.pinnedCategories, graph.settings.categoryColors, graph.settings.categoryOrder, graph.settings.recentCount) { pinned, colors, order, recent ->
+            Prefs(pinned, colors, order, recent)
         },
         combine(graph.syncEngine.status, graph.notes.pendingCount, graph.settings.account) { status, pending, account ->
             Triple(status, pending, account != null)
         },
     ) { notes, categories, prefs, sync ->
-        val (pinnedNames, colors, order) = prefs
+        val (pinnedNames, colors, order, recentCount) = prefs
         val (status, pending, configured) = sync
 
         val visible = notes.filter { !it.parent.isArchive() }
@@ -51,7 +51,7 @@ class HomeViewModel(private val graph: AppGraph) : ViewModel() {
         val pinnedHere = pinnedNames.filter { it in categories }
 
         HomeUiState(
-            recent = visible.take(RECENT_COUNT).map { it.toRow() },
+            recent = visible.take(recentCount).map { it.toRow() },
             chips = ordered.filter { it !in pinnedHere },
             pinned = pinnedHere.map { category ->
                 val own = visible.filter { it.parent == category }
@@ -80,8 +80,9 @@ class HomeViewModel(private val graph: AppGraph) : ViewModel() {
 
     private fun String.isArchive() = this == ARCHIVE_DIR || startsWith("$ARCHIVE_DIR/")
 
+    private data class Prefs(val pinned: List<String>, val colors: Map<String, String>, val order: List<String>, val recentCount: Int)
+
     companion object {
-        const val RECENT_COUNT = 4
         const val SECTION_COUNT = 3
     }
 }

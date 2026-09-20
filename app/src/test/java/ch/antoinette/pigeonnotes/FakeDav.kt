@@ -26,6 +26,8 @@ class FakeDav(private val prefix: String = "/remote.php/dav/files/me/Notes") : D
     private val counter = AtomicInteger(1)
     var requests = ArrayList<String>()
     val propfinds get() = requests.count { it.startsWith("PROPFIND") }
+    /** Runs while a PUT is being served, to simulate a client editing during the upload. */
+    var duringPut: ((String) -> Unit)? = null
 
     init {
         nodes[""] = Node(null, nextEtag())
@@ -105,6 +107,7 @@ class FakeDav(private val prefix: String = "/remote.php/dav/files/me/Notes") : D
             }
 
             "PUT" -> {
+                duringPut?.invoke(path)
                 val existing = nodes[path]
                 if (ifNoneMatch == "*" && existing != null) return MockResponse(code = 412)
                 if (ifMatch != null && (existing == null || existing.etag != ifMatch)) return MockResponse(code = 412)
@@ -162,6 +165,16 @@ class FakeSyncDao : SyncDao {
     override fun observePendingCount(): Flow<Int> = rows.map { m -> m.values.count { it.localState != LocalState.CLEAN } }
     override fun observeErrorCount(): Flow<Int> = rows.map { m -> m.values.count { it.syncError != null } }
     override suspend fun upsert(entry: SyncEntry) { rows.value = rows.value + (entry.path to entry) }
+    override suspend fun markEdited(path: String, state: LocalState, title: String, preview: String, modified: Long, size: Long): Int {
+        val e = rows.value[path] ?: return 0
+        upsert(e.copy(localState = state, title = title, preview = preview, modified = modified, size = size))
+        return 1
+    }
+    override suspend fun markUploaded(path: String, etag: String?, seenModified: Long) {
+        val e = rows.value[path] ?: return
+        val state = if (e.modified == seenModified) LocalState.CLEAN else e.localState
+        upsert(e.copy(baseEtag = etag, movedFrom = null, syncError = null, localState = state))
+    }
     override suspend fun upsertAll(entries: List<SyncEntry>) = entries.forEach { upsert(it) }
     override suspend fun delete(path: String) { rows.value = rows.value - path }
     override suspend fun clear() { rows.value = emptyMap() }
