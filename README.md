@@ -45,16 +45,25 @@ the editor.
 ## Building
 
 Toolchain: JDK 21, Android SDK with `platforms;android-37.2` and `build-tools;37.0.0`, and the
-included Gradle wrapper. Point `local.properties` (`sdk.dir=…`) or `ANDROID_HOME` at the SDK.
-
-> `gradle.properties` currently sets `org.gradle.java.home` to a JDK path on the original
-> development machine. Adjust or remove that line when building elsewhere.
+included Gradle wrapper. Point `local.properties` (`sdk.dir=…`) or `ANDROID_HOME` at the SDK. If
+the default JDK isn't 21, set `org.gradle.java.home` in your user-level `~/.gradle/gradle.properties`.
 
 ```bash
 ./gradlew assembleDebug        # → app/build/outputs/apk/debug/app-debug.apk
 ./gradlew testDebugUnitTest    # JVM unit tests
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+`versionCode` is the number of commits on `HEAD`, so a newer commit always installs as an update.
+
+## Releases
+
+GitHub Actions ([build.yml](.github/workflows/build.yml)) runs the unit tests on every push. Every
+push to `main` also builds a release APK and publishes it on the repo's Releases page as
+`pigeon-notes-0.1.<n>.apk`. Open that page on the phone to download and install it.
+
+Local and CI builds are all signed with the same key (the debug keystore, which CI restores from the
+`DEBUG_KEYSTORE_BASE64` secret), so they install over each other and keep the app's data.
 
 ## Project structure
 

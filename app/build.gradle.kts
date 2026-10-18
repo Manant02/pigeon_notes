@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// Number of commits on HEAD: increases with every commit and is the same on every machine (CI
+// needs a full clone), so a local build never counts as a downgrade of a CI build or vice versa.
+val commitCount: Int = providers.exec {
+    commandLine("git", "rev-list", "--count", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim().toIntOrNull() ?: 1
+
 android {
     namespace = "ch.antoinette.pigeonnotes"
     compileSdk = 37
@@ -13,13 +20,16 @@ android {
         applicationId = "ch.antoinette.pigeonnotes"
         minSdk = 34
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = commitCount
+        versionName = "0.1.$commitCount"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Same key as local debug builds (CI restores ~/.android/debug.keystore from a secret),
+            // so release and debug APKs install over each other without losing app data.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

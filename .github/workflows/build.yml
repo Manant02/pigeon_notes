@@ -1,0 +1,66 @@
+# Tests every push to any branch (PRs show these checks); every push to main also builds a release APK and publishes it
+# as a GitHub Release (download it on the phone from the repo's Releases page).
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history: versionCode is the commit count
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Install SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.2" "build-tools;37.0.0" > /dev/null
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Restore signing key
+        if: github.ref == 'refs/heads/main'
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret DEBUG_KEYSTORE_BASE64 is missing; an APK signed with another key would not install over the existing app."
+            exit 1
+          fi
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+
+      - name: Build release APK
+        if: github.ref == 'refs/heads/main'
+        run: ./gradlew assembleRelease
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(git rev-list --count HEAD)
+          apk="pigeon-notes-0.1.$n.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk"
+          git log -1 --format='%s%n%n%b' | grep -v '^Co-Authored-By:' > notes.md
+          gh release create "build-$n" "$apk" --target "$GITHUB_SHA" --title "0.1.$n" --notes-file notes.md --latest
