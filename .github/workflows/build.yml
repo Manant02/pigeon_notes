@@ -48,7 +48,12 @@ jobs:
             exit 1
           fi
           mkdir -p ~/.android
-          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+          # Whitespace (line wraps from copying the value out of a terminal) is not part of the key.
+          if ! printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > ~/.android/debug.keystore 2>/dev/null \
+              || ! keytool -list -keystore ~/.android/debug.keystore -storepass android > /dev/null 2>&1; then
+            echo "::error::Secret DEBUG_KEYSTORE_BASE64 is not a valid base64-encoded keystore. Set it to the output of: base64 -w0 ~/.android/debug.keystore"
+            exit 1
+          fi
 
       - name: Build release APK
         if: github.ref == 'refs/heads/main'
