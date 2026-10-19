@@ -3,6 +3,8 @@ package ch.antoinette.pigeonnotes
 import androidx.compose.foundation.text.input.placeCursorAtEnd
 import ch.antoinette.pigeonnotes.domain.markdown.BlockKind
 import ch.antoinette.pigeonnotes.ui.editor.DocumentModel
+import ch.antoinette.pigeonnotes.ui.editor.EnterAction
+import ch.antoinette.pigeonnotes.ui.editor.enterAction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -12,6 +14,11 @@ import org.junit.Test
 class DocumentModelTest {
 
     private fun model(text: String) = DocumentModel(text)
+
+    /** Activates the block at [index] (tests address blocks by position, the editor by id). */
+    private fun DocumentModel.activate(index: Int, offset: Int) = activate(blocks[index].id, offset)
+
+    private fun DocumentModel.toggleCheckbox(index: Int, offset: Int) = toggleCheckbox(blocks[index].id, offset)
 
     /** Activates the block at [index], types [text] (replacing its content) and returns the model. */
     private fun DocumentModel.type(index: Int, text: String, cursorAtEnd: Boolean = true): DocumentModel {
@@ -372,6 +379,110 @@ class DocumentModelTest {
         m.type(code, src.replace("val b = 2", "val b = 3"))
         m.commit()
         assertEquals(text.replace("val b = 2", "val b = 3"), m.doc)
+    }
+
+    @Test
+    fun `an untouched note is returned exactly as loaded, whatever its end`() {
+        for (text in listOf("No final newline", "Blank lines at the end\n\n\n", "- item\n\n  \n")) {
+            val m = model(text)
+            for (i in m.blocks.indices) {
+                m.activate(i, 0)
+                m.commit()
+            }
+            m.activateAtEnd()
+            m.commit()
+            assertEquals(text, m.currentText())
+        }
+    }
+
+    @Test
+    fun `an edited note is saved with one final newline and no blank lines at the end`() {
+        val m = model("One\n\n\n")
+        m.type(0, "Uno")
+        assertEquals("Uno\n", m.currentText())
+        val n = model("No final newline")
+        n.type(0, "Edited")
+        assertEquals("Edited\n", n.currentText())
+    }
+
+    @Test
+    fun `whitespace in blank lines stays as it is`() {
+        val m = model("A\n \nB\n\n\t\nC\n") // A's separator is " ", the empty line holds a tab
+        assertEquals(listOf(BlockKind.PARAGRAPH, BlockKind.PARAGRAPH, BlockKind.EMPTY, BlockKind.PARAGRAPH), m.blocks.map { it.kind })
+        m.activate(0, 1)
+        m.splitActive(1) // empty line below A
+        assertEquals("A\n \n\nB\n\n\t\nC\n", m.doc)
+        m.activate(m.blocks.indexOfFirst { it.source == "\t" }, 0)
+        m.splitActive(0) // another empty line below the tab
+        assertEquals("A\n \n\nB\n\n\t\n\nC\n", m.doc)
+    }
+
+    @Test
+    fun `blocks keep their identity when others are edited`() {
+        val m = model("Intro\n\n![img](a.png)\n\nText\n")
+        val ids = m.blocks.map { it.id }
+        m.activate(0, 5)
+        m.splitActive(5)
+        m.active!!.field.edit { replace(0, length, "New") }
+        m.commit()
+        assertEquals(listOf("Intro", "New", "![img](a.png)", "Text"), m.blocks.map { it.source })
+        assertEquals(ids[0], m.blocks[0].id)
+        assertEquals("the image below keeps its item, so it is not reloaded", ids[1], m.blocks[2].id)
+        assertEquals(ids[2], m.blocks[3].id)
+    }
+
+    @Test
+    fun `removing a block between two others keeps them apart`() {
+        val m = model("Para\n# Heading\n\nMore\n")
+        assertEquals(listOf(BlockKind.PARAGRAPH, BlockKind.HEADING, BlockKind.PARAGRAPH), m.blocks.map { it.kind })
+        m.type(1, "")
+        m.deleteEmptyActive()
+        assertEquals("Para\n\nMore\n", m.doc)
+        assertEquals("not merged into one paragraph", listOf("Para", "More"), m.blocks.map { it.source })
+        assertEquals("Para", m.active!!.field.text.toString())
+    }
+
+    @Test
+    fun `backspace at the start of text typed at the end joins it to the last paragraph`() {
+        val m = model("One\n")
+        m.activateAtEnd()
+        m.active!!.field.edit { replace(0, length, "Two"); placeCursorBeforeCharAt(0) }
+        m.joinWithPrevious()
+        assertEquals("OneTwo\n", m.currentText())
+        assertEquals(3, m.active!!.field.selection.start)
+    }
+
+    @Test
+    fun `tapping a block after an edit above still opens that block`() {
+        val m = model("One\n\nTwo\n\n- [ ] Three\n")
+        val three = m.blocks[2].id
+        m.activate(0, 3)
+        m.splitActive(3) // inserts a block above "Three"
+        m.toggleCheckbox(three, "- ".length)
+        assertEquals("- [x] Three", m.blocks.single { it.id == three }.source)
+        m.activate(three, 0)
+        assertEquals("- [x] Three", m.active!!.field.text.toString())
+    }
+
+    // ---- what Enter does ------------------------------------------------------------------------
+
+    @Test
+    fun `enter continues lists and quotes`() {
+        assertEquals(EnterAction.Continue("- "), enterAction(BlockKind.LIST, "- a", 3))
+        assertEquals(EnterAction.Continue("3. "), enterAction(BlockKind.LIST, "1. a\n2. b", 9))
+        assertEquals(EnterAction.Continue("  - [ ] "), enterAction(BlockKind.LIST, "- a\n  - [x] b", 13))
+        assertEquals(EnterAction.LeaveList(4, 6), enterAction(BlockKind.LIST, "- a\n- ", 6))
+        assertEquals(EnterAction.Continue("> "), enterAction(BlockKind.QUOTE, "> a", 3))
+        assertEquals(EnterAction.Split, enterAction(BlockKind.HEADING, "# a", 3))
+    }
+
+    @Test
+    fun `enter leaves a code block only after its closing fence`() {
+        val code = "```\ncode\n```"
+        assertEquals(EnterAction.Exit, enterAction(BlockKind.CODE, code, code.length))
+        assertEquals(EnterAction.Newline, enterAction(BlockKind.CODE, code, 8))
+        assertEquals("not closed yet", EnterAction.Newline, enterAction(BlockKind.CODE, "```\ncode", 8))
+        assertEquals(EnterAction.Exit, enterAction(BlockKind.MATH, "$$\nx\n$$", 7))
     }
 
     // ---- undo / redo ---------------------------------------------------------------------------

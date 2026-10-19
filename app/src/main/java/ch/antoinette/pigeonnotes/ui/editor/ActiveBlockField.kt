@@ -12,12 +12,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.delete
-import androidx.compose.foundation.text.input.insert
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,7 +35,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import ch.antoinette.pigeonnotes.domain.markdown.Analysis
 import ch.antoinette.pigeonnotes.domain.markdown.BlockKind
-import ch.antoinette.pigeonnotes.domain.markdown.BlockParser
 import ch.antoinette.pigeonnotes.domain.markdown.InlineStyler
 
 /**
@@ -142,69 +139,5 @@ class MarkdownOutputTransformation(
             val a = s.start.coerceIn(0, length); val b = s.end.coerceIn(0, length)
             if (b > a) addStyle(style, a, b)
         }
-    }
-}
-
-/**
- * Enter key semantics: paragraphs and headings split into a new block; list items continue the
- * list (or leave it when the item is empty); quotes continue the quote; code keeps plain newlines,
- * except after the closing fence (or a formula's closing `$$`), where Enter continues below the block.
- */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-class EnterTransformation(
-    private val kind: BlockKind,
-    private val onSplit: (Int) -> Unit,
-    private val onLeaveList: (Int, Int) -> Unit,
-    private val onExitBlock: () -> Unit,
-) : InputTransformation {
-    override fun TextFieldBuffer.transformInput() {
-        if (changes.changeCount != 1) return
-        val range = changes.getRange(0)
-        if (range.length != 1 || charAt(range.start) != '\n') return
-        val newlineAt = range.start
-        when (kind) {
-            BlockKind.PARAGRAPH, BlockKind.HEADING, BlockKind.IMAGE, BlockKind.EMPTY -> {
-                val cursor = changes.getOriginalRange(0).start
-                revertAllChanges()
-                onSplit(cursor)
-            }
-
-            BlockKind.LIST -> {
-                val lineStart = asCharSequence().lastIndexOf('\n', newlineAt - 1) + 1
-                val line = asCharSequence().substring(lineStart, newlineAt)
-                val m = LIST_LINE.matchEntire(line)
-                if (m == null) return
-                val (indent, bullet, checkbox, content) = m.destructured
-                if (content.isBlank()) {
-                    revertAllChanges()
-                    onLeaveList(lineStart, newlineAt)
-                    return
-                }
-                val nextBullet = bullet.dropLast(1).toIntOrNull()?.let { "${it + 1}${bullet.last()}" } ?: bullet
-                val prefix = indent + nextBullet + " " + (if (checkbox.isNotEmpty()) "[ ] " else "")
-                insert(newlineAt + 1, prefix)
-                placeCursorAfterCharAt(newlineAt + prefix.length)
-            }
-
-            BlockKind.QUOTE, BlockKind.ALERT -> {
-                insert(newlineAt + 1, "> ")
-                placeCursorAfterCharAt(newlineAt + 2)
-            }
-
-            BlockKind.CODE, BlockKind.MATH -> {
-                if (newlineAt != length - 1) return
-                val source = asCharSequence().substring(0, newlineAt)
-                if (kind == BlockKind.MATH || BlockParser.isClosedFence(source)) {
-                    revertAllChanges()
-                    onExitBlock()
-                }
-            }
-
-            else -> Unit
-        }
-    }
-
-    companion object {
-        private val LIST_LINE = Regex("""^(\s*)([-*+]|\d+[.)])\s+(\[[ xX]\]\s+)?(.*)$""")
     }
 }

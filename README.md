@@ -78,7 +78,8 @@ app/src/main/java/ch/antoinette/pigeonnotes/
 └── ui/           Compose screens: home, note lists, editor, settings
 ```
 
-The unit tests in `app/src/test/` cover Markdown parsing, the editor's document model, the sync
+The unit tests in `app/src/test/` cover Markdown parsing, the editor's document model (plus random
+editing sessions in `EditorFuzzTest` that check it stays consistent and never loses text), the sync
 decision table and the sync engine against an in-memory fake WebDAV server (`FakeDav`) and
 OkHttp's MockWebServer.
 
