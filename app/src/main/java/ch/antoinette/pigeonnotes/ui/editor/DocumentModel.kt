@@ -28,6 +28,13 @@ class ActiveBlock(
  * The note text as a list of blocks with at most one of them "active" (being typed into).
  * Pure document logic — no storage, no Android — so the whitespace and Enter/Backspace rules are testable.
  *
+ * Every block keeps its source verbatim, and so does the whitespace between blocks: the text is only
+ * changed where the user edits it, so a note opened and saved again stays byte-identical (it is
+ * shared with Obsidian, Typora and Nextcloud Notes). An edit (Enter, Backspace, …) replaces the
+ * affected block ranges, reparses, and then says where the cursor belongs as an offset into the new
+ * text; [placeCursor] finds the block holding that offset. The cursor therefore never depends on a
+ * block being found at an exact position, and cannot get lost.
+ *
  * @param onChanged called whenever the document text changes, to schedule a save
  */
 class DocumentModel(
@@ -80,6 +87,12 @@ class DocumentModel(
     /** Called on every keystroke in the active block, so typing becomes undoable in groups. */
     fun onTyped() = record(typedNow = true)
 
+    /** Records an undo step and schedules a save after edits made with `setDoc(notify = false)`. */
+    private fun changed() {
+        record(typedNow = false)
+        onChanged()
+    }
+
     private fun record(typedNow: Boolean) {
         val text = currentText()
         if (text == lastText) return
@@ -118,9 +131,7 @@ class DocumentModel(
         lastText = text; typing = false
         canUndo = undoStack.isNotEmpty(); canRedo = redoStack.isNotEmpty()
         onChanged()
-        val idx = blocks.indexOfLast { it.start <= at }
-        if (idx >= 0 && at <= blocks[idx].end) activateExisting(idx, at - blocks[idx].start)
-        else if (idx >= 0) activateExisting(idx, blocks[idx].source.length)
+        placeCursor(at)
     }
 
     /** Document text including whatever is typed in the active block, normalised to one trailing newline. */
@@ -129,9 +140,8 @@ class DocumentModel(
         return if (base.isBlank()) "" else base.trimEnd('\n') + "\n"
     }
 
-    /** The document with the active block's current text folded in. */
-    private fun spliced(a: ActiveBlock): String {
-        val text = a.field.text.toString()
+    /** The document with the active block's current text (or [text]) folded in. */
+    private fun spliced(a: ActiveBlock, text: String = a.field.text.toString()): String {
         return when {
             a.kind == BlockKind.EMPTY || a.virtual -> if (text.isEmpty()) doc else doc.replaceRange(a.start, a.start, text + "\n")
             else -> doc.replaceRange(a.start, a.end, text)
@@ -154,9 +164,20 @@ class DocumentModel(
         active = ActiveBlock(index, b.kind, b.level, b.start, b.end, TextFieldState(b.source, TextRange(cursor)))
     }
 
-    private fun activateEmptyAt(position: Int) {
-        val idx = blocks.indexOfFirst { it.kind == BlockKind.EMPTY && it.start == position }
-        if (idx >= 0) activateExisting(idx, 0) else activateAtEnd()
+    /**
+     * Puts the cursor at document offset [at], in whichever block holds it after the last reparse.
+     * An offset between two blocks lands at the end of the block before it; one past the last block
+     * opens a new line at the end of the note (which is then directly below it).
+     */
+    private fun placeCursor(at: Int) {
+        val idx = blocks.indexOfLast { it.start <= at }
+        val b = blocks.getOrNull(idx)
+        when {
+            b != null && at <= b.end -> activateExisting(idx, at - b.start)
+            idx == blocks.lastIndex -> activateAtEnd()
+            b != null -> activateExisting(idx, b.source.length)
+            else -> activateExisting(0, 0)
+        }
     }
 
     /**
@@ -181,21 +202,36 @@ class DocumentModel(
     fun commit() {
         val a = active ?: return
         active = null
-        val text = a.field.text.toString()
+        val raw = a.field.text.toString()
+        val text = closeFence(raw)
         when {
-            a.kind == BlockKind.EMPTY || a.virtual -> if (text.isNotBlank()) setDoc(spliced(a))
-            text == doc.substring(a.start, a.end) -> Unit
+            a.kind == BlockKind.EMPTY || a.virtual -> if (text.isNotBlank()) setDoc(spliced(a, text))
+            raw == doc.substring(a.start, a.end) -> Unit
             // A block emptied out leaves one empty line behind, not two.
             text.isBlank() -> setDoc(doc.replaceRange(a.start, minOf(a.end + 1, doc.length), ""))
-            else -> setDoc(spliced(a))
+            else -> setDoc(spliced(a, text))
         }
+    }
+
+    /** [text] with a code fence it leaves open closed, so it cannot swallow the blocks below it. */
+    private fun closeFence(text: String): String =
+        BlockParser.unclosedFence(text)?.let { text.trimEnd('\n') + "\n" + it } ?: text
+
+    /** Writes [source] in place of the active block (or onto its empty line) and returns where it starts. */
+    private fun replaceActive(a: ActiveBlock, source: String): Int {
+        active = null
+        val empty = a.kind == BlockKind.EMPTY || a.virtual
+        setDoc(if (empty) doc.replaceRange(a.start, a.start, source + "\n") else doc.replaceRange(a.start, a.end, source), notify = false)
+        return a.start
     }
 
     // ---- Enter / Backspace ----------------------------------------------------------------------
 
     /**
      * Enter in a paragraph/heading. At the start of the block this inserts an empty line above and
-     * keeps the cursor on the text (Typora); otherwise the text after the cursor becomes a new block.
+     * keeps the cursor on the text (Typora); at the end an empty line opens directly below; in the
+     * middle the text after the cursor becomes a new block. A line opening a code fence gets its
+     * closing fence and the cursor on the line between them.
      */
     fun splitActive(cursor: Int) {
         val a = active ?: return
@@ -204,47 +240,72 @@ class DocumentModel(
         val before = text.substring(0, at).trimEnd()
         val after = text.substring(at).trimStart()
 
+        val fence = if (after.isEmpty()) BlockParser.unclosedFence(before) else null
+        if (fence != null) {
+            val start = replaceActive(a, "$before\n\n$fence")
+            placeCursor(start + before.length + 1)
+            changed()
+            return
+        }
+
         if (a.kind == BlockKind.EMPTY || a.virtual) {
             if (text.isBlank()) {
                 // Enter on an empty line: add another empty line and stay below it.
                 val pos = a.start
                 val wasVirtual = a.virtual
                 active = null
-                setDoc(doc.replaceRange(pos, pos, "\n"))
-                if (wasVirtual) openVirtualAtEnd() else activateEmptyAt(pos + 1)
+                setDoc(doc.replaceRange(pos, pos, "\n"), notify = false)
+                if (wasVirtual) openVirtualAtEnd() else placeCursor(pos + 1)
+                changed()
             } else {
                 // Typed text then Enter: materialise the paragraph, then split it.
                 val pos = a.start
                 commit()
-                val idx = blocks.indexOfFirst { it.start == pos }
-                if (idx >= 0) {
-                    activateExisting(idx, at)
-                    splitActive(at)
-                }
+                placeCursor(pos + at)
+                val b = active
+                if (b != null && b.kind != BlockKind.EMPTY && !b.virtual) splitActive(b.field.selection.start)
             }
             return
         }
 
+        if (text.isBlank()) {
+            // The block was emptied: it becomes an empty line, and Enter adds one below that.
+            commit()
+            placeCursor(a.start)
+            if (active?.kind == BlockKind.EMPTY) splitActive(0)
+            return
+        }
+
+        active = null
         when {
-            before.isEmpty() && after.isNotEmpty() -> {
+            before.isEmpty() -> {
                 // Cursor at the very start: push the block down, leaving an empty line above.
-                active = null
-                setDoc(doc.replaceRange(a.start, a.start, "\n"))
-                val idx = blocks.indexOfFirst { it.start == a.start + 1 }
-                if (idx >= 0) activateExisting(idx, 0)
+                val add = newlinesForBlankLineAbove(a.index)
+                setDoc(doc.replaceRange(a.start, a.end, "\n".repeat(add) + closeFence(after)), notify = false)
+                placeCursor(a.start + add)
             }
             after.isEmpty() -> {
-                active = null
-                setDoc(doc.replaceRange(a.start, a.end, before))
-                openEmptyLineAfter(a.start + before.length)
+                val source = closeFence(before)
+                setDoc(doc.replaceRange(a.start, a.end, source), notify = false)
+                openBlankLineAfter(a.start + source.length)
             }
             else -> {
-                active = null
-                setDoc(doc.replaceRange(a.start, a.end, "$before\n\n$after"))
-                val idx = blocks.indexOfFirst { it.start == a.start + before.length + 2 }
-                if (idx >= 0) activateExisting(idx, 0)
+                val head = closeFence(before)
+                setDoc(doc.replaceRange(a.start, a.end, head + "\n\n" + closeFence(after)), notify = false)
+                placeCursor(a.start + head.length + 2)
             }
         }
+        changed()
+    }
+
+    /** Enter after the closing fence of a code block (or the `$$` of a formula): continue below it. */
+    fun exitActive() {
+        val a = active ?: return
+        commit()
+        val idx = blocks.indexOfLast { it.start <= a.start }
+        if (idx < 0) return
+        openBlankLineAfter(blocks[idx].end)
+        changed()
     }
 
     /** Enter on an empty list item: drop the bullet and continue below the list. */
@@ -257,27 +318,53 @@ class DocumentModel(
         when {
             kept.isEmpty() && rest.isEmpty() -> {
                 // The list was a single empty item: replace it with one empty line.
-                setDoc(doc.replaceRange(a.start, minOf(a.end + 1, doc.length), ""))
-                activateEmptyAt(a.start)
+                setDoc(doc.replaceRange(a.start, minOf(a.end + 1, doc.length), ""), notify = false)
+                placeCursor(a.start)
             }
             kept.isEmpty() -> {
-                setDoc(doc.replaceRange(a.start, a.end, "\n$rest")) // empty line above the remaining list
-                activateEmptyAt(a.start)
+                // An empty line above the remaining list.
+                val add = newlinesForBlankLineAbove(a.index)
+                setDoc(doc.replaceRange(a.start, a.end, "\n".repeat(add) + rest), notify = false)
+                placeCursor(a.start + add - 1)
             }
             else -> {
-                setDoc(doc.replaceRange(a.start, a.end, if (rest.isEmpty()) kept else "$kept\n\n$rest"))
-                openEmptyLineAfter(a.start + kept.length)
+                setDoc(doc.replaceRange(a.start, a.end, if (rest.isEmpty()) kept else "$kept\n\n$rest"), notify = false)
+                openBlankLineAfter(a.start + kept.length)
             }
         }
+        changed()
     }
 
-    /** Creates (if needed) and activates an empty line right after the block ending at [blockEnd]. */
-    private fun openEmptyLineAfter(blockEnd: Int) {
-        if (doc.substring(blockEnd).trim('\n').isEmpty()) {
+    // One newline ends a block and one more separates it from the next; only further newlines are
+    // visible empty lines (see BlockParser.emptyLines). Blocks may also follow each other with a
+    // single newline (a heading directly above its text), so an empty line between two blocks can
+    // take more than one inserted newline to appear.
+
+    /**
+     * Opens an empty line directly below the block ending at [blockEnd] and puts the cursor on it.
+     * Below the last block that is the new line at the end of the note.
+     */
+    private fun openBlankLineAfter(blockEnd: Int) {
+        val next = blocks.firstOrNull { it.kind != BlockKind.EMPTY && it.start >= blockEnd }
+        val newlines = doc.substring(blockEnd, next?.start ?: doc.length).count { it == '\n' }
+        if (next == null && newlines < 3) {
             activateAtEnd(); return
         }
-        setDoc(doc.replaceRange(blockEnd, blockEnd, "\n"))
-        activateEmptyAt(blockEnd + 2)
+        setDoc(doc.replaceRange(blockEnd, blockEnd, "\n".repeat(maxOf(1, 3 - newlines))), notify = false)
+        // The third newline after the block is the first empty line.
+        var nl = blockEnd - 1
+        repeat(3) { nl = doc.indexOf('\n', nl + 1) }
+        placeCursor(nl)
+    }
+
+    /** How many newlines to insert in front of block [index] so an empty line shows directly above it. */
+    private fun newlinesForBlankLineAbove(index: Int): Int {
+        // Before the first block every newline is an empty line.
+        val prev = blocks.subList(0, index).lastOrNull { it.kind != BlockKind.EMPTY } ?: return 1
+        // Front matter's source includes its closing newline.
+        val from = if (prev.kind == BlockKind.FRONTMATTER) prev.end - 1 else prev.end
+        val newlines = doc.substring(from, blocks[index].start).count { it == '\n' }
+        return maxOf(1, 3 - newlines)
     }
 
     /**
@@ -321,10 +408,9 @@ class DocumentModel(
             // Text typed on an empty line is a paragraph in the making: materialise it, then join.
             val pos = a.start
             commit()
-            val idx = blocks.indexOfFirst { it.start == pos }
-            if (idx < 0) return
-            activateExisting(idx, 0)
-            joinWithPrevious()
+            placeCursor(pos)
+            val b = active
+            if (b != null && b.kind != BlockKind.EMPTY && !b.virtual && b.start == pos) joinWithPrevious()
             return
         }
         if (a.index == 0) return
@@ -333,17 +419,15 @@ class DocumentModel(
         when (prev.kind) {
             BlockKind.EMPTY -> {
                 setDoc(doc.replaceRange(a.start, a.end, text).removeRange(prev.start, prev.start + 1))
-                val idx = blocks.indexOfFirst { it.start == a.start - 1 }
-                if (idx >= 0) activateExisting(idx, 0)
+                placeCursor(a.start - 1)
             }
             BlockKind.PARAGRAPH, BlockKind.HEADING, BlockKind.LIST, BlockKind.QUOTE, BlockKind.ALERT -> {
                 setDoc(doc.replaceRange(prev.start, a.end, prev.source + text))
-                val idx = blocks.indexOfFirst { it.start == prev.start }
-                if (idx >= 0) activateExisting(idx, prev.source.length)
+                placeCursor(prev.end)
             }
             else -> {
                 if (text != doc.substring(a.start, a.end)) setDoc(doc.replaceRange(a.start, a.end, text))
-                activateExisting(a.index - 1, prev.source.length)
+                placeCursor(prev.end)
             }
         }
     }

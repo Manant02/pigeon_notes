@@ -121,6 +121,31 @@ object BlockParser {
 
     private val FENCE = Regex("""^(`{3,}|~{3,})""")
 
+    /**
+     * The fence that would close a ``` / ~~~ code block left open at the end of [text], or null when
+     * every fence is closed. An unclosed fence runs to the end of the note and swallows everything
+     * below it, so the editor closes one before writing it back.
+     */
+    fun unclosedFence(text: String): String? {
+        var open: String? = null
+        for (line in text.lines()) {
+            val t = line.trim()
+            val f = FENCE.find(t)?.value ?: continue
+            if (open == null) {
+                // A backtick fence's info string cannot contain backticks: "```x```" is inline code.
+                if (f[0] == '`' && t.substring(f.length).contains('`')) continue
+                open = f
+            } else if (f[0] == open[0] && f.length >= open.length && t.all { it == open[0] }) {
+                open = null
+            }
+        }
+        return open
+    }
+
+    /** Whether [source] is a fenced code block with its closing fence on the last line. */
+    fun isClosedFence(source: String): Boolean =
+        FENCE.containsMatchIn(source.trimStart()) && source.trimEnd().contains('\n') && unclosedFence(source) == null
+
     /** End offset of the first line at or after [from] whose text ends with `$$`, or null if the block never closes. */
     private fun closingMathLine(doc: String, from: Int): Int? {
         var i = from

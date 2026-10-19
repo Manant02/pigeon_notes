@@ -226,6 +226,154 @@ class DocumentModelTest {
         assertEquals(0, m.active!!.index)
     }
 
+    // ---- Enter where blocks follow each other without a blank line ------------------------------
+
+    @Test
+    fun `enter at the end of a heading directly above text opens a line right below it`() {
+        val m = model("# Title\nText\n\nMore\n")
+        assertEquals(listOf(BlockKind.HEADING, BlockKind.PARAGRAPH, BlockKind.PARAGRAPH), m.blocks.map { it.kind })
+        m.activate(0, 7)
+        m.splitActive(7)
+        assertEquals("the cursor stays below the heading, not at the end of the note", 1, m.active!!.index)
+        assertEquals(BlockKind.EMPTY, m.active!!.kind)
+        m.active!!.field.edit { replace(0, length, "Mid") }
+        m.commit()
+        assertEquals("# Title\n\nMid\n\nText\n\nMore\n", m.doc)
+    }
+
+    @Test
+    fun `enter at the end of a paragraph directly above a code block`() {
+        val m = model("Intro\n```\ncode\n```\n\nEnd\n")
+        assertEquals(BlockKind.CODE, m.blocks[1].kind)
+        m.activate(0, 5)
+        m.splitActive(5)
+        assertEquals(1, m.active!!.index)
+        assertEquals(BlockKind.EMPTY, m.active!!.kind)
+        assertEquals(BlockKind.CODE, m.blocks[2].kind)
+    }
+
+    @Test
+    fun `enter at the start of text directly below a heading opens a line above it`() {
+        val m = model("# Title\nText\n")
+        m.activate(1, 0)
+        m.splitActive(0)
+        assertEquals(listOf(BlockKind.HEADING, BlockKind.EMPTY, BlockKind.PARAGRAPH), m.blocks.map { it.kind })
+        assertEquals("Text", m.active!!.field.text.toString())
+        assertEquals(0, m.active!!.field.selection.start)
+    }
+
+    @Test
+    fun `enter at the start keeps what was typed in the block`() {
+        val m = model("One\n\nTwo\n")
+        m.type(1, "Changed", cursorAtEnd = false)
+        m.splitActive(0)
+        assertEquals("One\n\n\nChanged\n", m.currentText())
+    }
+
+    @Test
+    fun `enter at the end of the last block goes to the line below it`() {
+        val m = model("One\n\nTwo\n")
+        m.activate(1, 3)
+        m.splitActive(3)
+        assertTrue(m.active!!.virtual)
+        m.active!!.field.edit { replace(0, length, "Three") }
+        m.commit()
+        assertEquals("One\n\nTwo\n\nThree\n", m.currentText())
+    }
+
+    // ---- code blocks ---------------------------------------------------------------------------
+
+    @Test
+    fun `enter after the closing fence continues below the code block`() {
+        val m = model("```\ncode\n```\n\nAfter\n")
+        m.activate(0, "```\ncode\n```".length)
+        m.exitActive()
+        assertEquals(BlockKind.EMPTY, m.active!!.kind)
+        assertEquals(1, m.active!!.index)
+        m.active!!.field.edit { replace(0, length, "Between") }
+        m.commit()
+        assertEquals("```\ncode\n```\n\nBetween\n\nAfter\n", m.doc)
+    }
+
+    @Test
+    fun `enter after the closing fence of the last block starts a new line at the end`() {
+        val m = model("```\ncode\n```\n")
+        m.activate(0, "```\ncode\n```".length)
+        m.exitActive()
+        assertTrue(m.active!!.virtual)
+        m.active!!.field.edit { replace(0, length, "After") }
+        m.commit()
+        assertEquals("```\ncode\n```\n\nAfter\n", m.currentText())
+    }
+
+    @Test
+    fun `enter after typing a fence opens the code block with its closing fence`() {
+        val m = model("One\n\nTwo\n")
+        m.activate(0, 3)
+        m.splitActive(3) // empty line below "One"
+        m.active!!.field.edit { replace(0, length, "```kotlin"); placeCursorAtEnd() }
+        m.splitActive(m.active!!.field.text.length)
+        assertEquals("One\n\n```kotlin\n\n```\n\nTwo\n", m.doc)
+        assertEquals(BlockKind.CODE, m.active!!.kind)
+        assertEquals("cursor on the line inside the fences", "```kotlin\n".length, m.active!!.field.selection.start)
+        assertEquals(BlockKind.PARAGRAPH, m.blocks.last().kind)
+    }
+
+    @Test
+    fun `enter after a fence in a paragraph opens the code block`() {
+        val m = model("Two\n")
+        m.type(0, "```")
+        m.splitActive(3)
+        assertEquals("```\n\n```\n", m.doc)
+        assertEquals(BlockKind.CODE, m.active!!.kind)
+        assertEquals(4, m.active!!.field.selection.start)
+    }
+
+    @Test
+    fun `a fence left open is closed so it cannot swallow the note`() {
+        val m = model("One\n\nTwo\n")
+        m.type(0, "```")
+        m.commit()
+        assertEquals("```\n```\n\nTwo\n", m.doc)
+        assertEquals(listOf(BlockKind.CODE, BlockKind.PARAGRAPH), m.blocks.map { it.kind })
+    }
+
+    // ---- the text is kept verbatim -------------------------------------------------------------
+
+    private val samples = listOf(
+        "---\ntitle: x\n---\n\n# Title\nText right below\n\n\n\nAfter blank lines\n",
+        "* star bullets\n* second\n\n__bold__ and *it*\n\n1) one\n2) two\n",
+        "Para  \nwith hard break\n\n```kotlin\nval a = 1\n\n\nval b = 2\n```\n| a | b |\n|---|---|\n| 1 | 2 |\n",
+        "$$\nx^2\n$$\n\n> quote\n> more\n\n> [!NOTE]\n> alert\n\n---\n\n![img](a.assets/p.png)\n",
+        "\n\nStarts with blank lines\n   \nand spaces\n\tIndented with tab\n",
+        "Windows\r\nline endings\r\n\r\nSecond\r\n",
+    )
+
+    @Test
+    fun `opening and committing every block without edits leaves the text byte-identical`() {
+        for (text in samples) {
+            val m = model(text)
+            assertEquals(text, m.currentText())
+            for (i in m.blocks.indices) {
+                m.activate(i, 0)
+                m.commit()
+                assertEquals("block $i of ${text.trim().take(20)}", text, m.doc)
+            }
+            assertTrue(!m.canUndo)
+        }
+    }
+
+    @Test
+    fun `an edit changes only the edited block`() {
+        val text = samples[2]
+        val m = model(text)
+        val code = m.blocks.indexOfFirst { it.kind == BlockKind.CODE }
+        val src = m.blocks[code].source
+        m.type(code, src.replace("val b = 2", "val b = 3"))
+        m.commit()
+        assertEquals(text.replace("val b = 2", "val b = 3"), m.doc)
+    }
+
     // ---- undo / redo ---------------------------------------------------------------------------
 
     private class Clock(var now: Long = 0L) : () -> Long {

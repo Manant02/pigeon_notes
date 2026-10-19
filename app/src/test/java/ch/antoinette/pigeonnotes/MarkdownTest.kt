@@ -52,6 +52,31 @@ class MarkdownTest {
     }
 
     @Test
+    fun `a selection keeps the syntax of the elements it touches`() {
+        val src = "see ![alt](a.png) and **b**"
+        val a = InlineStyler.analyze(src, BlockKind.PARAGRAPH)
+        assertEquals("see 🖼 alt and b", InlineStyler.project(a).text)
+        val alt = src.indexOf("alt")
+        // Selecting the alt text must not collapse the image syntax under the selection.
+        assertEquals("see ![alt](a.png) and b", InlineStyler.project(a, alt, cursorEnd = alt + 3).text)
+        // A selection over both elements shows both.
+        assertEquals(src, InlineStyler.project(a, 0, cursorEnd = src.length).text)
+    }
+
+    @Test
+    fun `unclosed fences are found`() {
+        assertEquals("```", BlockParser.unclosedFence("```"))
+        assertEquals("~~~~", BlockParser.unclosedFence("text\n~~~~ js\ncode"))
+        assertEquals(null, BlockParser.unclosedFence("```kt\ncode\n```"))
+        assertEquals("````", BlockParser.unclosedFence("````\n```\n"))
+        assertEquals(null, BlockParser.unclosedFence("inline ```x``` code"))
+        assertEquals(null, BlockParser.unclosedFence("```x```"))
+        assertTrue(BlockParser.isClosedFence("```\ncode\n```"))
+        assertTrue(!BlockParser.isClosedFence("```\ncode"))
+        assertTrue(!BlockParser.isClosedFence("```"))
+    }
+
+    @Test
     fun `offset mapping round trips across hidden markers`() {
         val a = InlineStyler.analyze("a **b** c [d](http://x) e", BlockKind.PARAGRAPH)
         val p = InlineStyler.project(a)

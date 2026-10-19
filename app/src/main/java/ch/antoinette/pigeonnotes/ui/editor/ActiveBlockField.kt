@@ -37,6 +37,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import ch.antoinette.pigeonnotes.domain.markdown.Analysis
 import ch.antoinette.pigeonnotes.domain.markdown.BlockKind
+import ch.antoinette.pigeonnotes.domain.markdown.BlockParser
 import ch.antoinette.pigeonnotes.domain.markdown.InlineStyler
 
 /**
@@ -50,11 +51,12 @@ fun ActiveBlockField(
     onTextChanged: () -> Unit,
     onSplit: (cursor: Int) -> Unit,
     onLeaveList: (lineStart: Int, lineEnd: Int) -> Unit,
+    onExitBlock: () -> Unit,
     onBackspaceAtStart: () -> Unit,
 ) {
     val focus = remember { FocusRequester() }
     val output = remember(active, palette) { MarkdownOutputTransformation(active.kind, active.level, palette) }
-    val input = remember(active) { EnterTransformation(active.kind, onSplit, onLeaveList) }
+    val input = remember(active) { EnterTransformation(active.kind, onSplit, onLeaveList, onExitBlock) }
 
     LaunchedEffect(active) {
         focus.requestFocus()
@@ -111,7 +113,11 @@ fun ActiveBlockField(
     }
 }
 
-/** Styles the raw block and hides markers whose owner element does not contain the cursor. */
+/**
+ * Styles the raw block and hides markers whose owner element does not contain the cursor. While text
+ * is selected, every element the selection touches shows its syntax: hiding it would shrink the text
+ * under the selection handles (an image collapsing to "🖼 alt" as soon as it is selected).
+ */
 class MarkdownOutputTransformation(
     private val kind: BlockKind,
     private val level: Int,
@@ -122,11 +128,12 @@ class MarkdownOutputTransformation(
     override fun TextFieldBuffer.transformOutput() {
         val source = asCharSequence().toString()
         val analysis = cached?.takeIf { it.source == source } ?: InlineStyler.analyze(source, kind, level).also { cached = it }
-        val cursor = if (selection.collapsed) selection.start else null
-        val projection = InlineStyler.project(analysis, cursor)
+        val selStart = selection.min
+        val selEnd = selection.max
+        val projection = InlineStyler.project(analysis, selStart, cursorEnd = selEnd)
         // Apply replacements back to front so earlier offsets stay valid, then styles in output coordinates.
         for (m in analysis.markers.asReversed()) {
-            if (cursor != null && m.ownerContains(cursor)) continue
+            if (m.ownerTouches(selStart, selEnd)) continue
             if (m.replacement.isEmpty()) delete(m.start, m.end) else replace(m.start, m.end, m.replacement)
         }
         val base = blockTextStyle(kind, level, palette)
@@ -140,13 +147,15 @@ class MarkdownOutputTransformation(
 
 /**
  * Enter key semantics: paragraphs and headings split into a new block; list items continue the
- * list (or leave it when the item is empty); quotes continue the quote; code keeps plain newlines.
+ * list (or leave it when the item is empty); quotes continue the quote; code keeps plain newlines,
+ * except after the closing fence (or a formula's closing `$$`), where Enter continues below the block.
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 class EnterTransformation(
     private val kind: BlockKind,
     private val onSplit: (Int) -> Unit,
     private val onLeaveList: (Int, Int) -> Unit,
+    private val onExitBlock: () -> Unit,
 ) : InputTransformation {
     override fun TextFieldBuffer.transformInput() {
         if (changes.changeCount != 1) return
@@ -180,6 +189,15 @@ class EnterTransformation(
             BlockKind.QUOTE, BlockKind.ALERT -> {
                 insert(newlineAt + 1, "> ")
                 placeCursorAfterCharAt(newlineAt + 2)
+            }
+
+            BlockKind.CODE, BlockKind.MATH -> {
+                if (newlineAt != length - 1) return
+                val source = asCharSequence().substring(0, newlineAt)
+                if (kind == BlockKind.MATH || BlockParser.isClosedFence(source)) {
+                    revertAllChanges()
+                    onExitBlock()
+                }
             }
 
             else -> Unit

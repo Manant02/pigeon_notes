@@ -17,7 +17,8 @@ data class StyleRange(val start: Int, val end: Int, val style: InlineStyle, val 
  * its owner element [ownerStart, ownerEnd]. Offsets are into the block source.
  */
 data class Marker(val start: Int, val end: Int, val ownerStart: Int, val ownerEnd: Int, val replacement: String = "") {
-    fun ownerContains(cursor: Int) = cursor in ownerStart..ownerEnd
+    /** Whether the cursor or selection [start, end] touches the owner element. */
+    fun ownerTouches(start: Int, end: Int) = start <= ownerEnd && end >= ownerStart
 }
 
 data class LinkRange(val start: Int, val end: Int, val url: String)
@@ -106,10 +107,11 @@ object InlineStyler {
 
     /**
      * Applies every marker whose owner does not contain [cursor] (all of them when [cursor] is null).
+     * With a selection, [cursor]..[cursorEnd], markers whose owner the selection touches stay visible.
      * With [renderMath], inline formulas outside the cursor collapse to [MATH_PLACEHOLDER] so the UI
      * can draw them; the active text field cannot show images, so it leaves this off.
      */
-    fun project(a: Analysis, cursor: Int? = null, renderMath: Boolean = false): Projection {
+    fun project(a: Analysis, cursor: Int? = null, renderMath: Boolean = false, cursorEnd: Int? = cursor): Projection {
         var markers = a.markers
         val mathHits = ArrayList<Pair<Marker, String>>()
         if (renderMath && a.math.isNotEmpty()) {
@@ -122,7 +124,7 @@ object InlineStyler {
             }
             markers = markers.sortedBy { it.start }
         }
-        val applied = markers.filter { cursor == null || !it.ownerContains(cursor) }
+        val applied = markers.filter { cursor == null || !it.ownerTouches(cursor, cursorEnd ?: cursor) }
         val sb = StringBuilder(a.source.length)
         var pos = 0
         for (m in applied) {

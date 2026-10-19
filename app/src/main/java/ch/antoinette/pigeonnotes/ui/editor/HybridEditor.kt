@@ -60,6 +60,7 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
                             onTextChanged = vm::onTextChanged,
                             onSplit = doc::splitActive,
                             onLeaveList = doc::leaveListActive,
+                            onExitBlock = doc::exitActive,
                             onBackspaceAtStart = doc::joinWithPrevious,
                         )
                     } else if (block != null) {
