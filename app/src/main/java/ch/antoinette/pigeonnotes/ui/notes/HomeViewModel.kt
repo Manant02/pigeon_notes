@@ -34,6 +34,8 @@ sealed interface TagFilter {
 }
 
 data class HomeUiState(
+    /** False only for the empty placeholder shown before the database's first emission. */
+    val loaded: Boolean = false,
     val quick: List<NoteRow> = emptyList(),
     val pages: List<PageTile> = emptyList(),
     val tags: List<String> = emptyList(),
@@ -73,6 +75,7 @@ class HomeViewModel(private val graph: AppGraph) : ViewModel() {
         val quick = structure.quick.map { it.toRow() }
         val visible = (quick + tagged).mapTo(HashSet()) { it.path }
         HomeUiState(
+            loaded = true,
             quick = quick,
             pages = ordered.map { page ->
                 val accent = CategoryAccent.of(colors[page.path])

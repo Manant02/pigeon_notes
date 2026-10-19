@@ -121,6 +121,11 @@ fun HomeScreen(
             onRefresh = vm::refresh,
             modifier = Modifier.padding(padding).fillMaxSize(),
         ) {
+            // Lazy lists keep their first visible item in view when items are inserted before it.
+            // Composed over the empty placeholder state, the column would stay on the pages once
+            // the quick notes load above them, and the pages grid on its "+" tile once the pages
+            // load before it. So the lists are composed only once the real data is there.
+            if (!state.loaded) return@PullToRefreshBox
             LazyColumn(
                 Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
