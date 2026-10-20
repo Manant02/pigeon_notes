@@ -71,7 +71,9 @@ over it. If `main` has moved on since, merge `main` into the branch first, other
 refuses the test build as a downgrade.
 
 Local and CI builds are all signed with the same key (the debug keystore, which CI restores from the
-`DEBUG_KEYSTORE_BASE64` secret), so they install over each other and keep the app's data.
+`DEBUG_KEYSTORE_BASE64` secret and checks every APK against), so they install over each other and
+keep the app's data. Releases up to `build-20` were signed with a different throwaway key each; an
+app installed from one of them has to be uninstalled once before a newer build installs.
 
 ## Project structure
 

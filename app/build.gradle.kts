@@ -25,11 +25,20 @@ android {
         versionName = providers.gradleProperty("pigeon.versionName").orNull ?: "0.1.$commitCount"
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // CI passes the keystore it restored from the DEBUG_KEYSTORE_BASE64 secret. Relying on the
+            // default location (~/.android/debug.keystore) is not enough there: on the GitHub runners
+            // the Android plugin looked elsewhere and silently signed every build with a new key.
+            providers.gradleProperty("pigeon.keystore").orNull?.let { storeFile = file(it) }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Same key as local debug builds (CI restores ~/.android/debug.keystore from a secret),
-            // so release and debug APKs install over each other without losing app data.
+            // Same key as local debug builds (CI passes the one from the secret), so release and
+            // debug APKs install over each other without losing app data.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
