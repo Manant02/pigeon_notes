@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
@@ -19,14 +20,20 @@ import ch.antoinette.pigeonnotes.domain.markdown.BlockKind
 
 /**
  * The document as a list of rendered blocks with (at most) one editable block in place.
- * Tapping empty space below the content starts a new paragraph at the end.
+ * Tapping empty space below the content starts a new paragraph at the end. Item `i` of [listState]
+ * is block `i`, so the table of contents can scroll to a heading by its block index.
  */
 @Composable
-fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (String) -> Unit, modifier: Modifier = Modifier) {
+fun HybridEditor(
+    vm: EditorViewModel,
+    palette: MarkdownPalette,
+    onOpenLink: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
+) {
     val doc = vm.document
     val blocks = doc.blocks
     val active = doc.active
-    val listState = rememberLazyListState()
 
     // Display list: the blocks, plus the new line at the end of the note while the cursor is on it.
     val count = blocks.size + (if (active?.virtual == true) 1 else 0)
