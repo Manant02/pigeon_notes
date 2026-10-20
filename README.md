@@ -63,6 +63,13 @@ GitHub Actions ([build.yml](.github/workflows/build.yml)) runs the unit tests on
 push to `main` also builds a release APK and publishes it on the repo's Releases page as
 `pigeon-notes-0.1.<n>.apk`. Open that page on the phone to download and install it.
 
+Every push to any other branch publishes a **test build** of it as a pre-release ("Test: <branch>"),
+so a change can be tried on the phone before its pull request is merged. Each push replaces the
+branch's test build, and deleting the branch removes it. A test build carries the version of the
+`main` commit the branch is based on: it installs over that release, and the next release installs
+over it. If `main` has moved on since, merge `main` into the branch first, otherwise the phone
+refuses the test build as a downgrade.
+
 Local and CI builds are all signed with the same key (the debug keystore, which CI restores from the
 `DEBUG_KEYSTORE_BASE64` secret), so they install over each other and keep the app's data.
 

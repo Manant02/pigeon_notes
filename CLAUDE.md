@@ -46,7 +46,10 @@ layout. Read it first.
 - Work on a branch and open a PR. Every push runs the unit tests in GitHub Actions
   ([.github/workflows/build.yml](.github/workflows/build.yml)). Merging into `main` builds a
   release APK and publishes it as a GitHub Release (`build-<n>`), which the owner installs on the
-  phone.
+  phone. Every push to another branch publishes a test build as a pre-release (`test-<branch>`)
+  with the version of the `main` commit the branch is based on, so the owner can try a change
+  before merging. Merge `main` into the branch when it has moved on, or the test build has a lower
+  version than the installed release and won't install.
 
 ## Signing
 

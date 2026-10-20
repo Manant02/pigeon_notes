@@ -20,8 +20,9 @@ android {
         applicationId = "ch.antoinette.pigeonnotes"
         minSdk = 34
         targetSdk = 37
-        versionCode = commitCount
-        versionName = "0.1.$commitCount"
+        // CI test builds of a branch pass the version of the main commit they are based on (build.yml).
+        versionCode = providers.gradleProperty("pigeon.versionCode").orNull?.toInt() ?: commitCount
+        versionName = providers.gradleProperty("pigeon.versionName").orNull ?: "0.1.$commitCount"
     }
 
     buildTypes {
