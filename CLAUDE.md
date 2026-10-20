@@ -55,6 +55,17 @@ each other without losing app data. CI restores it from the `DEBUG_KEYSTORE_BASE
 commit a keystore and never change the signing setup: an APK signed with another key can only be
 installed after uninstalling the app, which deletes its local data.
 
+- The key in the secret is the reference: the app on the phone was reinstalled from a CI release
+  (`build-18`), so it is signed with that key. A local build only installs over it if the local
+  `~/.android/debug.keystore` is the same file (decode the secret into it to get there).
+- A key mismatch shows on the phone as Play Protect's "hasn't seen an app from this developer"
+  followed by "App not installed" (`INSTALL_FAILED_UPDATE_INCOMPATIBLE` through adb). A versionCode
+  lower than the installed one fails the same way (`INSTALL_FAILED_VERSION_DOWNGRADE`); the
+  installed version is shown at the bottom of the app's page in the system settings.
+- Uninstalling also deletes settings kept only on the phone: the Nextcloud login, page order, page
+  colours, page rows and the app settings. Notes come back from the server, but only after a sync
+  with nothing pending before the uninstall.
+
 ## Conventions
 
 - Commit messages: a short subject in the imperative or "Area: change" form, then a body in prose
