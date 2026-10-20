@@ -46,18 +46,26 @@ layout. Read it first.
 - Work on a branch and open a PR. Every push runs the unit tests in GitHub Actions
   ([.github/workflows/build.yml](.github/workflows/build.yml)). Merging into `main` builds a
   release APK and publishes it as a GitHub Release (`build-<n>`), which the owner installs on the
-  phone.
+  phone. Every push to another branch publishes a test build as a pre-release (`test-<branch>`)
+  with the version of the `main` commit the branch is based on, so the owner can try a change
+  before merging. Merge `main` into the branch when it has moved on, or the test build has a lower
+  version than the installed release and won't install.
 
 ## Signing
 
-Every APK (local debug, CI release) is signed with the same debug keystore, so they install over
-each other without losing app data. CI restores it from the `DEBUG_KEYSTORE_BASE64` secret. Never
-commit a keystore and never change the signing setup: an APK signed with another key can only be
-installed after uninstalling the app, which deletes its local data.
+Every APK (local debug, CI release, CI test build) is signed with the same debug keystore, so they
+install over each other without losing app data. CI restores it from the `DEBUG_KEYSTORE_BASE64`
+secret and passes its path to Gradle (`-Ppigeon.keystore=...`); a "Check signing key" step fails
+the build if the APK is signed with any other key. Never commit a keystore and never change the
+signing setup: an APK signed with another key can only be installed after uninstalling the app,
+which deletes its local data.
 
-- The key in the secret is the reference: the app on the phone was reinstalled from a CI release
-  (`build-18`), so it is signed with that key. A local build only installs over it if the local
+- The key in the secret is the reference. A local build only installs over CI builds if the local
   `~/.android/debug.keystore` is the same file (decode the secret into it to get there).
+- Until build 20, CI did not actually use the secret: on the GitHub runners the Android plugin
+  does not read `~/.android/debug.keystore` and silently generated a new key for every build. Those
+  releases (up to `build-20`) each have a different key, and an app installed from one of them can
+  only be replaced by uninstalling it first.
 - A key mismatch shows on the phone as Play Protect's "hasn't seen an app from this developer"
   followed by "App not installed" (`INSTALL_FAILED_UPDATE_INCOMPATIBLE` through adb). A versionCode
   lower than the installed one fails the same way (`INSTALL_FAILED_VERSION_DOWNGRADE`); the

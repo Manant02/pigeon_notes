@@ -11,46 +11,156 @@ enum class BlockKind {
     PARAGRAPH, HEADING, LIST, CODE, QUOTE, TABLE, HR, HTML, FRONTMATTER, IMAGE, MATH, ALERT,
 
     /**
-     * A blank line beyond the single one that separates blocks (or before the first block). It has a
-     * zero-length range at the start of that line; typing into it splices `text + "\n"` there.
+     * A visible blank line: one that is not the [Block.separator] right after a block. Blank lines
+     * before the first block are all visible. Typing into one turns it into a block.
      */
     EMPTY,
 }
 
-/** A top-level editing unit of the document: [start, end) in the full text, never including trailing newlines. */
+/** Identity of a [Block] while a note is being edited; [NONE] for blocks straight from the parser. */
+@JvmInline
+value class BlockId(val value: Long) {
+    companion object {
+        val NONE = BlockId(0)
+    }
+}
+
+/**
+ * A top-level unit of a note: a run of whole lines that the markdown parser reads as one block, or
+ * ([BlockKind.EMPTY]) one blank line. Every line of the note belongs to exactly one block, so
+ * [BlockParser.join] gives back the note exactly.
+ */
 data class Block(
     val kind: BlockKind,
-    val start: Int,
-    val end: Int,
+    /** The block's lines, verbatim, joined by "\n". For [BlockKind.EMPTY] the blank line itself ("" or whitespace). */
     val source: String,
     /** Heading level for [BlockKind.HEADING], else 0. */
     val level: Int = 0,
-)
+    /**
+     * The blank line right after a block that separates it from what follows ("" or that line's
+     * whitespace), or null when the next line follows directly (a heading right above its text).
+     * It belongs to the block, so it is not shown as an empty line of its own.
+     */
+    val separator: String? = null,
+    val id: BlockId = BlockId.NONE,
+) {
+    /** How many lines of the note the block takes up, its separator included. */
+    val lineCount: Int get() = source.count { it == '\n' } + 1 + (if (separator != null) 1 else 0)
 
-/** Splits a document into top-level blocks with exact source ranges, so an edit to one block can be spliced back. */
+    /** Same text and meaning, whatever the [id]. */
+    fun sameAs(other: Block) =
+        kind == other.kind && source == other.source && level == other.level && separator == other.separator
+}
+
+/** Splits a note into whole-line blocks, and joins them back. */
 object BlockParser {
     val flavour = GFMFlavourDescriptor()
     private val parser = MarkdownParser(flavour)
 
+    /**
+     * The blocks of [doc]. A block always consists of whole lines (indentation and trailing spaces
+     * included); one blank line after a block is its separator, and every further blank line is an
+     * [BlockKind.EMPTY] block. `join(parse(doc), doc.endsWith("\n")) == doc` for every text.
+     */
     fun parse(doc: String): List<Block> {
-        val blocks = ArrayList<Block>()
-        var contentStart = 0
-        frontMatterEnd(doc)?.let { end ->
-            blocks += Block(BlockKind.FRONTMATTER, 0, end, doc.substring(0, end))
-            contentStart = end
+        val lines = lines(doc)
+        val ranges = lineRanges(doc, lines)
+        val out = ArrayList<Block>()
+        var i = 0
+        var r = 0
+        while (i < lines.size) {
+            val range = ranges.getOrNull(r)
+            if (range == null || range.first > i) {
+                out += Block(BlockKind.EMPTY, lines[i])
+                i++
+                continue
+            }
+            var next = range.last + 1
+            val separator = lines.getOrNull(next)?.takeIf { it.isBlank() && ranges.getOrNull(r + 1)?.first != next }
+            if (separator != null) next++
+            out += Block(range.kind, lines.subList(range.first, range.last + 1).joinToString("\n"), range.level, separator)
+            i = next
+            r++
         }
-        // After front matter the gap is measured from its closing newline, like after any other block.
-        var prevEnd = if (contentStart > 0) contentStart - 1 else 0
-        var first = contentStart == 0
-        for (raw in rawBlocks(doc, contentStart)) {
-            blocks += emptyLines(doc, prevEnd, raw.start, leading = first)
-            blocks += Block(raw.kind, raw.start, raw.end, doc.substring(raw.start, raw.end), raw.level)
-            prevEnd = raw.end
+        return out
+    }
+
+    /** The note text of [blocks], the inverse of [parse]. [finalNewline]: whether the last line ends with a newline. */
+    fun join(blocks: List<Block>, finalNewline: Boolean = true): String {
+        if (blocks.isEmpty()) return ""
+        val sb = StringBuilder()
+        var first = true
+        fun line(text: String) {
+            if (!first) sb.append('\n')
+            sb.append(text)
             first = false
         }
-        // Blank lines after the last block are just as visible as the ones between blocks.
-        blocks += emptyLines(doc, prevEnd, doc.length, leading = first)
-        return blocks
+        for (b in blocks) {
+            line(b.source)
+            b.separator?.let(::line)
+        }
+        if (finalNewline) sb.append('\n')
+        return sb.toString()
+    }
+
+    /** The lines of [doc], without their newlines; a final newline does not start another line. */
+    fun lines(doc: String): List<String> = if (doc.isEmpty()) emptyList() else doc.removeSuffix("\n").split('\n')
+
+    private class LineRange(val first: Int, val last: Int, val kind: BlockKind, val level: Int)
+
+    /**
+     * The lines [first, last] each block of [doc] covers. Top-level markdown blocks never share a
+     * line; should two ranges overlap anyway they are merged, and a non-blank line no block claims
+     * becomes a paragraph, so no text can end up hidden in an "empty" line.
+     */
+    private fun lineRanges(doc: String, lines: List<String>): List<LineRange> {
+        if (lines.isEmpty()) return emptyList()
+        val lineStarts = IntArray(lines.size)
+        for (k in 1 until lines.size) lineStarts[k] = lineStarts[k - 1] + lines[k - 1].length + 1
+        fun lineOf(offset: Int): Int = lineStarts.binarySearch(offset).let { if (it >= 0) it else -it - 2 }
+
+        val claimed = ArrayList<LineRange>()
+        for (raw in rawBlocks(doc)) {
+            val first = lineOf(raw.start)
+            val last = lineOf(maxOf(raw.start, raw.end - 1)).coerceAtLeast(first)
+            val prev = claimed.lastOrNull()
+            if (prev != null && first <= prev.last) {
+                claimed[claimed.lastIndex] = LineRange(prev.first, maxOf(prev.last, last), prev.kind, prev.level)
+            } else {
+                claimed += LineRange(first, last, raw.kind, raw.level)
+            }
+        }
+
+        val out = ArrayList<LineRange>()
+        var i = 0
+        fun unclaimedUpTo(end: Int) {
+            while (i < end) {
+                if (lines[i].isBlank()) { i++; continue }
+                val start = i
+                while (i + 1 < end && lines[i + 1].isNotBlank()) i++
+                out += LineRange(start, i, BlockKind.PARAGRAPH, 0)
+                i++
+            }
+        }
+        for (range in claimed) {
+            unclaimedUpTo(range.first)
+            out += range
+            i = range.last + 1
+        }
+        unclaimedUpTo(lines.size)
+        return out
+    }
+
+    /** Front matter and the markdown blocks in document order, as character ranges. */
+    private fun rawBlocks(doc: String): List<Raw> {
+        val out = ArrayList<Raw>()
+        var contentStart = 0
+        frontMatterEnd(doc)?.let { end ->
+            out += Raw(BlockKind.FRONTMATTER, 0, end, 0)
+            contentStart = end
+        }
+        out += contentBlocks(doc, contentStart)
+        return out
     }
 
     private class Raw(val kind: BlockKind, val start: Int, val end: Int, val level: Int)
@@ -60,7 +170,7 @@ object BlockParser {
      * `$$`, blank lines allowed inside) is cut out first, because the markdown parser does not know
      * it and would split it into paragraphs; the text between formulas is parsed as usual.
      */
-    private fun rawBlocks(doc: String, from: Int): List<Raw> {
+    private fun contentBlocks(doc: String, from: Int): List<Raw> {
         val out = ArrayList<Raw>()
         var segmentStart = from
         for ((start, end) in mathBlocks(doc, from)) {
@@ -80,7 +190,7 @@ object BlockParser {
         for (node in root.children) {
             val kind = kindOf(node, text) ?: continue
             var end = node.endOffset
-            while (end > node.startOffset && (text[end - 1] == '\n' || text[end - 1] == ' ')) end--
+            while (end > node.startOffset && text[end - 1].isWhitespace()) end--
             if (end <= node.startOffset) continue
             out += Raw(kind, from + node.startOffset, from + end, headingLevel(node))
         }
@@ -121,6 +231,31 @@ object BlockParser {
 
     private val FENCE = Regex("""^(`{3,}|~{3,})""")
 
+    /**
+     * The fence that would close a ``` / ~~~ code block left open at the end of [text], or null when
+     * every fence is closed. An unclosed fence runs to the end of the note and swallows everything
+     * below it, so the editor closes one before writing it back.
+     */
+    fun unclosedFence(text: String): String? {
+        var open: String? = null
+        for (line in text.lines()) {
+            val t = line.trim()
+            val f = FENCE.find(t)?.value ?: continue
+            if (open == null) {
+                // A backtick fence's info string cannot contain backticks: "```x```" is inline code.
+                if (f[0] == '`' && t.substring(f.length).contains('`')) continue
+                open = f
+            } else if (f[0] == open[0] && f.length >= open.length && t.all { it == open[0] }) {
+                open = null
+            }
+        }
+        return open
+    }
+
+    /** Whether [source] is a fenced code block with its closing fence on the last line. */
+    fun isClosedFence(source: String): Boolean =
+        FENCE.containsMatchIn(source.trimStart()) && source.trimEnd().contains('\n') && unclosedFence(source) == null
+
     /** End offset of the first line at or after [from] whose text ends with `$$`, or null if the block never closes. */
     private fun closingMathLine(doc: String, from: Int): Int? {
         var i = from
@@ -130,18 +265,6 @@ object BlockParser {
             i = lineEnd + 1
         }
         return null
-    }
-
-    /**
-     * EMPTY blocks for the blank lines in the gap [from, to). One newline ends the previous block and
-     * one more is the normal separator; every further newline is an empty line the user can see and edit.
-     */
-    private fun emptyLines(doc: String, from: Int, to: Int, leading: Boolean): List<Block> {
-        val newlines = (from until to).filter { doc[it] == '\n' }
-        val skip = if (leading) 0 else 2
-        if (newlines.size <= skip) return emptyList()
-        // Each extra newline terminates an empty line that starts at that same offset.
-        return newlines.drop(skip).map { nl -> Block(BlockKind.EMPTY, nl, nl, "") }
     }
 
     /** Full parse of a single block's source, for inline styling. */

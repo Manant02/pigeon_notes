@@ -1,23 +1,25 @@
-# Tests every push to any branch (PRs show these checks); every push to main also builds a release APK and publishes it
-# as a GitHub Release (download it on the phone from the repo's Releases page).
+# Tests every push to any branch (PRs show these checks). Every push to main also builds a release APK and publishes
+# it as a GitHub Release; every push to another branch publishes a test build of it as a pre-release, so a change can
+# be tried on the phone before it is merged. Download either on the phone from the repo's Releases page.
 name: Build
 
 on:
   push:
     branches: ["**"]
+  delete:
   workflow_dispatch:
-
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: write
 
 jobs:
   build:
+    if: github.event_name != 'delete'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v5
         with:
@@ -38,8 +40,10 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
 
+      # Releases and test builds are signed with the key from the secret, so they install over each other
+      # without losing the app's data. The keystore's path is passed to Gradle explicitly (pigeon.keystore):
+      # on the runners the Android plugin does not look in ~/.android, and silently made a new key per build.
       - name: Restore signing key
-        if: github.ref == 'refs/heads/main'
         env:
           DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
@@ -47,17 +51,45 @@ jobs:
             echo "::error::Secret DEBUG_KEYSTORE_BASE64 is missing; an APK signed with another key would not install over the existing app."
             exit 1
           fi
-          mkdir -p ~/.android
+          keystore="$RUNNER_TEMP/debug.keystore"
           # Whitespace (line wraps from copying the value out of a terminal) is not part of the key.
-          if ! printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > ~/.android/debug.keystore 2>/dev/null \
-              || ! keytool -list -keystore ~/.android/debug.keystore -storepass android > /dev/null 2>&1; then
-            echo "::error::Secret DEBUG_KEYSTORE_BASE64 is not a valid base64-encoded keystore. Set it to the output of: base64 -w0 ~/.android/debug.keystore"
+          if ! printf '%s' "$DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$keystore" 2>/dev/null \
+              || ! keytool -list -keystore "$keystore" -storepass android -alias androiddebugkey > /dev/null 2>&1; then
+            echo "::error::Secret DEBUG_KEYSTORE_BASE64 is not a base64-encoded debug keystore (password android, key androiddebugkey). Set it to the output of: base64 -w0 ~/.android/debug.keystore"
             exit 1
           fi
+          echo "KEYSTORE=$keystore" >> "$GITHUB_ENV"
 
       - name: Build release APK
         if: github.ref == 'refs/heads/main'
-        run: ./gradlew assembleRelease
+        run: ./gradlew assembleRelease -Ppigeon.keystore="$KEYSTORE"
+
+      # A test build carries the version of the main commit the branch is based on. Android installs an equal
+      # version over the installed one but refuses a lower one: the test build installs over the release it is
+      # based on, newer test builds of the branch over older ones, and every later release over the test build.
+      - name: Build test APK
+        if: github.ref != 'refs/heads/main'
+        run: |
+          git fetch --quiet --no-tags origin main
+          base=$(git rev-list --count "$(git merge-base HEAD origin/main)")
+          ahead=$(git rev-list --count origin/main..HEAD)
+          echo "VERSION=0.1.$base-test.$ahead" >> "$GITHUB_ENV"
+          ./gradlew assembleRelease -Ppigeon.keystore="$KEYSTORE" \
+            -Ppigeon.versionCode="$base" -Ppigeon.versionName="0.1.$base-test.$ahead"
+
+      # Never publish an APK signed with any other key than the one in the secret: it would not install.
+      - name: Check signing key
+        run: |
+          want=$(keytool -list -v -keystore "$KEYSTORE" -storepass android -alias androiddebugkey \
+            | sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | tr 'A-F' 'a-f')
+          got=$("$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs app/build/outputs/apk/release/app-release.apk \
+            | sed -n 's/.*certificate SHA-256 digest: //p')
+          echo "Key in the secret: $want"
+          echo "APK signed with:   $got"
+          if [ -z "$want" ] || [ "$want" != "$got" ]; then
+            echo "::error::The APK is not signed with the key from DEBUG_KEYSTORE_BASE64."
+            exit 1
+          fi
 
       - name: Publish release
         if: github.ref == 'refs/heads/main'
@@ -69,3 +101,33 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$apk"
           git log -1 --format='%s%n%n%b' | grep -v '^Co-Authored-By:' > notes.md
           gh release create "build-$n" "$apk" --target "$GITHUB_SHA" --title "0.1.$n" --notes-file notes.md --latest
+
+      # One pre-release per branch, replaced on every push; it is never marked as the latest release.
+      - name: Publish test build
+        if: github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          tag="test-${BRANCH//\//-}"
+          apk="pigeon-notes-$VERSION.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$apk"
+          {
+            echo "Test build of branch \`$BRANCH\` at ${GITHUB_SHA::7}: $(git log -1 --format=%s)"
+            echo
+            echo "Installs over release ${VERSION%-test.*}; the next release installs over it."
+          } > notes.md
+          gh release delete "$tag" --yes --cleanup-tag 2> /dev/null || true
+          gh release create "$tag" "$apk" --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Test: $BRANCH ($VERSION)" --notes-file notes.md
+
+  # A deleted branch (e.g. after its pull request is merged) takes its test build with it.
+  remove-test-build:
+    if: github.event_name == 'delete' && github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete the branch's test build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.ref }}
+        run: gh release delete "test-${BRANCH//\//-}" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true

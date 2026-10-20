@@ -12,14 +12,16 @@ import org.junit.Test
 class MarkdownTest {
 
     @Test
-    fun `blocks cover the document with exact ranges`() {
+    fun `blocks cover the document line for line`() {
         val doc = "# Title\n\nSome *text* here.\n\n- a\n- b\n\n```kt\nval x = 1\n```\n\n![img](a.png)\n"
         val blocks = BlockParser.parse(doc)
         assertEquals(
             listOf(BlockKind.HEADING, BlockKind.PARAGRAPH, BlockKind.LIST, BlockKind.CODE, BlockKind.IMAGE),
             blocks.map { it.kind },
         )
-        for (b in blocks) assertEquals(b.source, doc.substring(b.start, b.end))
+        assertEquals(doc, BlockParser.join(blocks))
+        // One blank line between blocks is the separator of the block above, not an empty line.
+        assertEquals(listOf("", "", "", "", null), blocks.map { it.separator })
         assertEquals(1, blocks[0].level)
         assertEquals("- a\n- b", blocks[2].source)
         assertEquals("```kt\nval x = 1\n```", blocks[3].source)
@@ -30,7 +32,7 @@ class MarkdownTest {
         val doc = "---\ntitle: x\ntags: [a]\n---\n\nBody\n"
         val blocks = BlockParser.parse(doc)
         assertEquals(BlockKind.FRONTMATTER, blocks[0].kind)
-        assertEquals("---\ntitle: x\ntags: [a]\n---\n", blocks[0].source)
+        assertEquals("---\ntitle: x\ntags: [a]\n---", blocks[0].source)
         assertEquals(BlockKind.PARAGRAPH, blocks[1].kind)
         assertEquals("Body", blocks[1].source)
     }
@@ -49,6 +51,31 @@ class MarkdownTest {
 
         val outside = InlineStyler.project(a, cursor = 2)
         assertEquals("say hi there", outside.text)
+    }
+
+    @Test
+    fun `a selection keeps the syntax of the elements it touches`() {
+        val src = "see ![alt](a.png) and **b**"
+        val a = InlineStyler.analyze(src, BlockKind.PARAGRAPH)
+        assertEquals("see 🖼 alt and b", InlineStyler.project(a).text)
+        val alt = src.indexOf("alt")
+        // Selecting the alt text must not collapse the image syntax under the selection.
+        assertEquals("see ![alt](a.png) and b", InlineStyler.project(a, alt, cursorEnd = alt + 3).text)
+        // A selection over both elements shows both.
+        assertEquals(src, InlineStyler.project(a, 0, cursorEnd = src.length).text)
+    }
+
+    @Test
+    fun `unclosed fences are found`() {
+        assertEquals("```", BlockParser.unclosedFence("```"))
+        assertEquals("~~~~", BlockParser.unclosedFence("text\n~~~~ js\ncode"))
+        assertEquals(null, BlockParser.unclosedFence("```kt\ncode\n```"))
+        assertEquals("````", BlockParser.unclosedFence("````\n```\n"))
+        assertEquals(null, BlockParser.unclosedFence("inline ```x``` code"))
+        assertEquals(null, BlockParser.unclosedFence("```x```"))
+        assertTrue(BlockParser.isClosedFence("```\ncode\n```"))
+        assertTrue(!BlockParser.isClosedFence("```\ncode"))
+        assertTrue(!BlockParser.isClosedFence("```"))
     }
 
     @Test
@@ -120,8 +147,8 @@ class MarkdownTest {
             listOf(BlockKind.PARAGRAPH, BlockKind.EMPTY, BlockKind.EMPTY, BlockKind.PARAGRAPH),
             blocks.map { it.kind },
         )
-        // Empty blocks are zero-length insertion points, and normal separation adds none.
-        assertTrue(blocks.filter { it.kind == BlockKind.EMPTY }.all { it.start == it.end })
+        assertEquals("", blocks[0].separator)
+        // Normal separation adds no empty line; before the first block every blank line is one.
         assertEquals(listOf(BlockKind.PARAGRAPH, BlockKind.PARAGRAPH), BlockParser.parse("One\n\nTwo\n").map { it.kind })
         assertEquals(listOf(BlockKind.EMPTY, BlockKind.PARAGRAPH), BlockParser.parse("\nOne\n").map { it.kind })
     }
@@ -164,5 +191,30 @@ class MarkdownTest {
         assertEquals("After", blocks[2].source)
         // An unclosed $$ stays ordinary text.
         assertTrue(BlockParser.parse("$$\nx\n\ntext\n").none { it.kind == BlockKind.MATH })
+    }
+
+    @Test
+    fun `blocks are whole lines, kept verbatim`() {
+        val doc = "# Title\nText right below  \n  indented\n\t\n\n> quote\n"
+        val blocks = BlockParser.parse(doc)
+        assertEquals(listOf(BlockKind.HEADING, BlockKind.PARAGRAPH, BlockKind.EMPTY, BlockKind.QUOTE), blocks.map { it.kind })
+        assertEquals("the heading's text follows directly", null, blocks[0].separator)
+        assertEquals("Text right below  \n  indented", blocks[1].source)
+        assertEquals("a whitespace-only line is kept as it is", "\t", blocks[1].separator)
+        assertEquals(doc, BlockParser.join(blocks))
+    }
+
+    @Test
+    fun `join gives back any text`() {
+        for (doc in listOf(
+            "", "\n", "\n\n", "One", "One\n", "One\n\n\n", "  \nOne\n   \n", "A\r\n\r\nB\r\n",
+            "---\nk: v\n---\nBody", "```\nopen fence\n\n\nrest", "- a\n\n\n- b\n", "$$\nx\n$$\n$$\ny\n$$",
+            "<!--\ncomment\n\n-->\nafter\n", "| a |\n|---|\n| 1 |\ntext\n",
+        )) {
+            val blocks = BlockParser.parse(doc)
+            assertEquals(doc, BlockParser.join(blocks, finalNewline = doc.isEmpty() || doc.endsWith("\n")))
+            // Only blank lines are ever empty blocks: no text can hide in one.
+            assertTrue(blocks.filter { it.kind == BlockKind.EMPTY }.all { it.source.isBlank() })
+        }
     }
 }

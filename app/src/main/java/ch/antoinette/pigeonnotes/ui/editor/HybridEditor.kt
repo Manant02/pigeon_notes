@@ -28,7 +28,7 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
     val active = doc.active
     val listState = rememberLazyListState()
 
-    // Display list: the parsed blocks, plus a virtual paragraph after the last one while it is being typed.
+    // Display list: the blocks, plus the new line at the end of the note while the cursor is on it.
     val count = blocks.size + (if (active?.virtual == true) 1 else 0)
 
     LaunchedEffect(active?.index, active?.virtual) {
@@ -47,10 +47,11 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
                 .pointerInput(Unit) { detectTapGestures { doc.activateAtEnd() } },
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 240.dp),
         ) {
-            items(count = count, key = { i -> if (i < blocks.size) "${blocks[i].start}:${blocks[i].kind}" else "virtual" }) { i ->
+            // Keyed by block id, so a block keeps its item (and its loaded image) while others change.
+            items(count = count, key = { i -> blocks.getOrNull(i)?.id?.value ?: "end" }) { i ->
                 val a = active
                 val block = blocks.getOrNull(i)
-                val editing = a != null && a.index == i
+                val editing = a != null && if (block == null) a.virtual else !a.virtual && a.id == block.id
 
                 Box(Modifier.fillMaxWidth().padding(vertical = spacingFor(block?.kind))) {
                     if (editing && a != null) {
@@ -60,6 +61,7 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
                             onTextChanged = vm::onTextChanged,
                             onSplit = doc::splitActive,
                             onLeaveList = doc::leaveListActive,
+                            onExitBlock = doc::exitActive,
                             onBackspaceAtStart = doc::joinWithPrevious,
                         )
                     } else if (block != null) {
@@ -67,8 +69,8 @@ fun HybridEditor(vm: EditorViewModel, palette: MarkdownPalette, onOpenLink: (Str
                             block = block,
                             palette = palette,
                             resolveLink = vm::resolveLink,
-                            onActivate = { offset -> doc.activate(i, offset) },
-                            onToggleCheckbox = { offset -> doc.toggleCheckbox(i, offset) },
+                            onActivate = { offset -> doc.activate(block.id, offset) },
+                            onToggleCheckbox = { offset -> doc.toggleCheckbox(block.id, offset) },
                             onOpenLink = onOpenLink,
                         )
                     }

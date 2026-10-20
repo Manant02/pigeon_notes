@@ -10,7 +10,8 @@ long a note is meant to live.
 - **Block-hybrid Markdown editor.** Native Jetpack Compose, no WebView: the note is shown
   rendered, and only the block you tap turns into raw Markdown for editing. Supports headings,
   lists, checkboxes, code, links, images, strikethrough and LaTeX (`$…$`, `$$…$$`), plus
-  undo/redo and a source mode.
+  undo/redo and a source mode. The Markdown is kept verbatim: only the text you edit changes, so
+  notes stay as written for Obsidian, Typora and Nextcloud Notes on the desktop.
 - **Three tiers of notes** on one home screen: quick notes, pages and tagged notes (see below).
 - **Share target.** Text shared from other apps becomes a new quick note.
 - **Login Flow v2.** Sign-in happens in the browser and the app only ever receives an app password.
@@ -62,8 +63,17 @@ GitHub Actions ([build.yml](.github/workflows/build.yml)) runs the unit tests on
 push to `main` also builds a release APK and publishes it on the repo's Releases page as
 `pigeon-notes-0.1.<n>.apk`. Open that page on the phone to download and install it.
 
+Every push to any other branch publishes a **test build** of it as a pre-release ("Test: <branch>"),
+so a change can be tried on the phone before its pull request is merged. Each push replaces the
+branch's test build, and deleting the branch removes it. A test build carries the version of the
+`main` commit the branch is based on: it installs over that release, and the next release installs
+over it. If `main` has moved on since, merge `main` into the branch first, otherwise the phone
+refuses the test build as a downgrade.
+
 Local and CI builds are all signed with the same key (the debug keystore, which CI restores from the
-`DEBUG_KEYSTORE_BASE64` secret), so they install over each other and keep the app's data.
+`DEBUG_KEYSTORE_BASE64` secret and checks every APK against), so they install over each other and
+keep the app's data. Releases up to `build-20` were signed with a different throwaway key each; an
+app installed from one of them has to be uninstalled once before a newer build installs.
 
 ## Project structure
 
@@ -77,7 +87,8 @@ app/src/main/java/ch/antoinette/pigeonnotes/
 └── ui/           Compose screens: home, note lists, editor, settings
 ```
 
-The unit tests in `app/src/test/` cover Markdown parsing, the editor's document model, the sync
+The unit tests in `app/src/test/` cover Markdown parsing, the editor's document model (plus random
+editing sessions in `EditorFuzzTest` that check it stays consistent and never loses text), the sync
 decision table and the sync engine against an in-memory fake WebDAV server (`FakeDav`) and
 OkHttp's MockWebServer.
 
