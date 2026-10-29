@@ -1,12 +1,16 @@
 package ch.antoinette.pigeonnotes.ui.editor
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FormatBold
@@ -22,28 +26,52 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 
-/** Formatting bar shown above the keyboard while a block is being edited. */
+/**
+ * Formatting bar shown above the keyboard while a block is being edited. Undo and redo stay at its
+ * start while the formatting buttons scroll, so they are always in reach.
+ */
 @Composable
-fun EditorToolbar(field: TextFieldState?, onDone: () -> Unit, onPickImage: () -> Unit, modifier: Modifier = Modifier) {
+fun EditorToolbar(
+    field: TextFieldState?,
+    canUndo: Boolean,
+    canRedo: Boolean,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
+    onDone: () -> Unit,
+    onPickImage: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Surface(modifier = modifier.fillMaxWidth(), tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp)) {
-            ToolButton(Icons.Default.FormatBold, "Bold") { field?.wrap("**") }
-            ToolButton(Icons.Default.FormatItalic, "Italic") { field?.wrap("*") }
-            ToolButton(Icons.Default.Code, "Code") { field?.wrap("`") }
-            ToolButton(Icons.Default.Title, "Heading") { field?.cycleHeading() }
-            ToolButton(Icons.Default.FormatListBulleted, "Bullet list") { field?.prefixLines("- ") }
-            ToolButton(Icons.Default.FormatListNumbered, "Numbered list") { field?.prefixLines("1. ") }
-            ToolButton(Icons.Default.CheckBox, "Checkbox") { field?.prefixLines("- [ ] ") }
-            ToolButton(Icons.Default.FormatQuote, "Quote") { field?.prefixLines("> ") }
-            ToolButton(Icons.Default.Link, "Link") { field?.insertLink() }
-            ToolButton(Icons.Default.Image, "Image", onPickImage)
-            ToolButton(Icons.Default.KeyboardArrowDown, "Done", onDone)
+        Row(Modifier.padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onUndo, enabled = canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo") }
+            IconButton(onClick = onRedo, enabled = canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo") }
+            VerticalDivider(Modifier.height(24.dp))
+            Box(Modifier.weight(1f)) { FormattingButtons(field, onDone, onPickImage) }
         }
+    }
+}
+
+@Composable
+private fun FormattingButtons(field: TextFieldState?, onDone: () -> Unit, onPickImage: () -> Unit) {
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp)) {
+        ToolButton(Icons.Default.FormatBold, "Bold") { field?.wrap("**") }
+        ToolButton(Icons.Default.FormatItalic, "Italic") { field?.wrap("*") }
+        ToolButton(Icons.Default.Code, "Code") { field?.wrap("`") }
+        ToolButton(Icons.Default.Title, "Heading") { field?.cycleHeading() }
+        ToolButton(Icons.Default.FormatListBulleted, "Bullet list") { field?.prefixLines("- ") }
+        ToolButton(Icons.Default.FormatListNumbered, "Numbered list") { field?.prefixLines("1. ") }
+        ToolButton(Icons.Default.CheckBox, "Checkbox") { field?.prefixLines("- [ ] ") }
+        ToolButton(Icons.Default.FormatQuote, "Quote") { field?.prefixLines("> ") }
+        ToolButton(Icons.Default.Link, "Link") { field?.insertLink() }
+        ToolButton(Icons.Default.Image, "Image", onPickImage)
+        ToolButton(Icons.Default.KeyboardArrowDown, "Done", onDone)
     }
 }
 
