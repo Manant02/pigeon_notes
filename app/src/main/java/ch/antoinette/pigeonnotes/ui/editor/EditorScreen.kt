@@ -97,12 +97,6 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val structure by vm.structure.collectAsStateWithLifecycle(Structure())
 
-    // No sync while the note is open; whatever was requested meanwhile runs when the screen closes.
-    DisposableEffect(vm) {
-        vm.holdSync()
-        onDispose { vm.releaseSync() }
-    }
-
     // Save when the app goes to the background.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -130,7 +124,7 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 title = {
-                    // The file name: tap it to rename the note.
+                    // The note's title (its H1); tap it to rename the file.
                     Text(
                         vm.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable(onClickLabel = "Rename") { renaming = true }.padding(end = 8.dp),
@@ -270,7 +264,7 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
 
     if (renaming) {
         // The whole name is selected, so typing replaces it and a tap places the cursor to adjust it.
-        var name by remember { mutableStateOf(TextFieldValue(vm.title, TextRange(0, vm.title.length))) }
+        var name by remember { mutableStateOf(TextFieldValue(vm.fileName, TextRange(0, vm.fileName.length))) }
         val focus = remember { FocusRequester() }
         val rename = { if (name.text.isNotBlank()) vm.rename(name.text.trim()); renaming = false }
         AlertDialog(

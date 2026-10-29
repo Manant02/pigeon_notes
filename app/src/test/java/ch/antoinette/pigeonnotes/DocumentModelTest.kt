@@ -548,4 +548,31 @@ class DocumentModelTest {
         m.load("fresh\n")
         assertTrue(!m.canUndo && !m.canRedo)
     }
+
+    @Test
+    fun `a new note opens with its title selected, so typing replaces it`() {
+        val m = model("# New Note\n")
+        assertTrue(m.selectTitle())
+        val a = m.active!!
+        assertEquals(0, a.index)
+        assertEquals("New Note", a.field.text.substring(a.field.selection.start, a.field.selection.end))
+        assertEquals("# New Note\n", m.currentText()) // untouched until typed
+        a.field.edit { replace(selection.start, selection.end, "Groceries") }
+        m.commit()
+        assertEquals("# Groceries\n", m.doc)
+    }
+
+    @Test
+    fun `only a leading one-line H1 is selected as title`() {
+        val shared = model("\n# Shared Note\n\nhttps://example.com\n")
+        assertTrue(shared.selectTitle())
+        assertEquals(BlockKind.HEADING, shared.active!!.kind)
+        val a = shared.active!!
+        assertEquals("Shared Note", a.field.text.substring(a.field.selection.start, a.field.selection.end))
+        for (text in listOf("Plain text\n", "## Section\n", "Intro\n\n# Later\n", "")) {
+            val m = model(text)
+            assertTrue(text, !m.selectTitle())
+            assertNull(text, m.active)
+        }
+    }
 }

@@ -11,10 +11,12 @@ layout. Read it first.
   Markdown. No WebView.
 - There's **no Android Studio**. Everything is built from the CLI with the Gradle wrapper.
 - **Folder layout** on the server under `/Notes`: quick notes directly in the root (generated
-  `note-yyMMdd-HHmm.md` names, titled by their first line), long-term pages in `Pages/` (a single
+  `note-yyMMdd-HHmm_Title.md` names), long-term pages in `Pages/` (a single
   file or a folder of notes), tagged notes in `Tags/` (directly there = untagged, `Tags/<Tag>/` =
   tagged, one tag per note), `_archive/` flat. Per-note assets live in `Name.assets/` next to
   `Name.md`. An assets folder is only moved or deleted when no sibling note links into it.
+- A note's title is its first H1, falling back to the file name. On closing an edited note its file
+  name follows the H1 (`note-yyMMdd-HHmm_Title.md`, or `Title.md` under `Pages/`); see `NoteText`.
 - Dot-files and dot-folders (`.obsidian/`, `.ztr-directory`) are skipped by sync: the same folder
   is used with Obsidian and Zettlr on the desktop.
 - The owner's notes are real data. Sync changes must never lose content: on doubt, keep both

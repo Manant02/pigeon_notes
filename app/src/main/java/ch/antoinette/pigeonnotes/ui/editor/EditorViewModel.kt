@@ -12,18 +12,26 @@ import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.domain.NotesRepository
 import ch.antoinette.pigeonnotes.ui.notes.pageFolder
 import ch.antoinette.pigeonnotes.ui.notes.tagFolder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Editing one note: the [DocumentModel] plus persistence, renaming, archiving and asset insertion. */
+/**
+ * Editing one note: the [DocumentModel] plus persistence, renaming, archiving and asset insertion.
+ *
+ * Sync is held from opening the note until it is closed and settled: saved, given the file name its
+ * H1 asks for, or dropped again when it is a new note left as created.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewModel() {
     val document = DocumentModel(onChanged = ::scheduleSave)
 
     var path by mutableStateOf(initialPath)
         private set
+    /** The note's display title ([NoteText.index]): its H1, else derived from the file name. */
     var title by mutableStateOf(NoteText.title(initialPath))
         private set
     var sourceMode by mutableStateOf(false)
@@ -45,27 +53,37 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
     /** Whole-document field used in source mode. */
     val sourceField = TextFieldState()
 
+    /** The file name, for the rename dialog. */
+    val fileName: String get() = NoteText.title(path)
+
     private var saveJob: Job? = null
     private var lastSaved: String? = null
 
+    /** Just created by [NotesRepository.create]: dropped again on close if still exactly a blank new note. */
+    private var fresh = false
+    /** The text changed while open: only then does the file name follow the H1 on close. */
+    private var edited = false
+    /** A name given by hand while open is kept on close rather than replaced by the H1's. */
+    private var renamedByHand = false
+    private var deleted = false
+
     init {
+        // No sync while the note is open: a half-typed note is neither uploaded mid-sentence nor
+        // overwritten by a download. Released in onCleared, once the note has its final name.
+        graph.syncEngine.hold()
         viewModelScope.launch {
             val text = graph.notes.read(initialPath)
             lastSaved = text
             document.load(text)
+            title = NoteText.index(initialPath, text).first
             loaded = true
-            if (text.isBlank()) document.activateAtEnd()
+            val selectTitle = graph.notes.takeFresh(initialPath)
+            fresh = selectTitle != null
+            when {
+                selectTitle == true && document.selectTitle() -> Unit
+                fresh || text.isBlank() -> document.activateAtEnd()
+            }
         }
-    }
-
-    // ---- sync hold ------------------------------------------------------------------------------
-
-    fun holdSync() = graph.syncEngine.hold()
-
-    /** Flushes first so the sync that follows the release carries the latest text. */
-    fun releaseSync() {
-        flush()
-        graph.syncEngine.release()
     }
 
     // ---- saving ---------------------------------------------------------------------------------
@@ -94,9 +112,12 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
 
     /** Persists the current document (with the active block folded in) if it changed. */
     fun flush() {
+        if (!loaded) return // the empty document before the note is read must not be saved over it
         val text = currentText()
         if (text == lastSaved) return
         lastSaved = text
+        edited = true
+        title = NoteText.index(path, text).first
         val p = path
         // App scope: this must survive the ViewModel being cleared on back navigation.
         graph.appScope.launch { graph.notes.save(p, text) }
@@ -123,7 +144,10 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
 
     // ---- note operations ------------------------------------------------------------------------
 
-    fun rename(newTitle: String) = moveNote(newTitle = newTitle)
+    fun rename(newTitle: String) {
+        renamedByHand = true
+        moveNote(newTitle = newTitle)
+    }
 
     fun archive(archive: Boolean) = moveNote(newParent = if (archive) NotesRepository.ARCHIVE_DIR else "")
 
@@ -151,10 +175,10 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
             flush()
             val newPath = graph.notes.move(path, newParent, newTitle)
             path = newPath
-            title = NoteText.title(newPath)
             archived = newPath.startsWith(NotesRepository.ARCHIVE_DIR + "/")
             // links to the assets folder may have been rewritten
             val text = graph.notes.read(newPath)
+            title = NoteText.index(newPath, text).first
             lastSaved = text
             if (text != currentText()) document.load(text)
         }
@@ -162,7 +186,7 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
 
     fun delete(onDone: () -> Unit) {
         saveJob?.cancel()
-        lastSaved = currentText() // suppress the flush in onCleared
+        deleted = true // nothing left to save in onCleared
         viewModelScope.launch { graph.notes.delete(path); onDone() }
     }
 
@@ -176,7 +200,35 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
 
     fun resolveLink(link: String): File? = graph.notes.resolveLink(path, link)
 
+    /**
+     * The note is closed: save it, then drop it if it is a new note still exactly as created, or
+     * else, if it was edited, give it the file name its H1 asks for. Runs in the app scope, which
+     * outlives this ViewModel, and only then lets sync run again.
+     */
     override fun onCleared() {
-        flush()
+        saveJob?.cancel()
+        val text = currentText()
+        val p = path
+        val drop = fresh && text == NoteText.NEW_NOTE_TEXT
+        val rename = (edited || text != lastSaved) && !renamedByHand
+        val skip = deleted || !loaded // nothing to save, or the note was never read
+        graph.appScope.launch {
+            try {
+                when {
+                    skip -> Unit
+                    drop -> graph.notes.delete(p)
+                    else -> {
+                        graph.notes.save(p, text)
+                        val renamed = if (rename) graph.notes.renameToTitle(p) else null
+                        // A standalone page's order and colour are kept by path.
+                        if (renamed != null && p.substringBeforeLast('/', "") == NotesRepository.PAGES_DIR) {
+                            graph.settings.renamePageRefs(p, renamed)
+                        }
+                    }
+                }
+            } finally {
+                withContext(Dispatchers.Main) { graph.syncEngine.release() }
+            }
+        }
     }
 }

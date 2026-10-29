@@ -169,4 +169,47 @@ class StructureTest {
         assertNull(dav.text(tagged))
         assertTrue("the moved-away source must not be fetched", dav.requests.none { it.startsWith("GET") })
     }
+
+    @Test
+    fun `new notes are named after their H1 and follow it when renamed`() {
+        sync()
+        val quick = runBlocking { repo.create("", initialText = NoteText.NEW_NOTE_TEXT, selectTitle = true) }
+        assertTrue(quick, Regex("""note-\d{6}-\d{4}_New-Note\.md""").matches(quick))
+        assertEquals("New Note", runBlocking { dao.get(quick) }!!.title)
+        assertEquals(true, repo.takeFresh(quick))
+        assertNull("fresh only once", repo.takeFresh(quick))
+
+        val stamp = quick.removeSuffix("_New-Note.md")
+        runBlocking { repo.save(quick, "# Groceries\n\nmilk\n") }
+        val renamed = runBlocking { repo.renameToTitle(quick) }
+        assertEquals("${stamp}_Groceries.md", renamed)
+        assertEquals("Groceries", runBlocking { dao.get(renamed!!) }!!.title)
+        assertNull("already fits", runBlocking { repo.renameToTitle(renamed!!) })
+
+        val page = runBlocking { repo.create("Pages/Recipes", initialText = NoteText.NEW_NOTE_TEXT) }
+        assertEquals("Pages/Recipes/New-Note.md", page)
+        runBlocking { repo.save(page, "# Lasagne al forno\n") }
+        assertEquals("Pages/Recipes/Lasagne-al-forno.md", runBlocking { repo.renameToTitle(page) })
+
+        sync()
+        assertEquals("# Groceries\n\nmilk\n", dav.text("${stamp}_Groceries.md"))
+        assertNull(dav.text(quick))
+        assertEquals("# Lasagne al forno\n", dav.text("Pages/Recipes/Lasagne-al-forno.md"))
+    }
+
+    @Test
+    fun `renaming to the title carries the assets and moves the note on the server`() {
+        dav.putFile("note-261008-1328.md", "Old note\n\n![p](note-261008-1328.assets/p.png)\n")
+        dav.putFile("note-261008-1328.assets/p.png", "img")
+        sync()
+        assertEquals("Old note", structure().quick.single().title)
+        runBlocking { repo.save("note-261008-1328.md", "# Trip\n\n![p](note-261008-1328.assets/p.png)\n") }
+        val renamed = runBlocking { repo.renameToTitle("note-261008-1328.md") }
+        assertEquals("note-261008-1328_Trip.md", renamed)
+        sync()
+        assertEquals("# Trip\n\n![p](note-261008-1328_Trip.assets/p.png)\n", dav.text("note-261008-1328_Trip.md"))
+        assertNotNull(dav.text("note-261008-1328_Trip.assets/p.png"))
+        assertNull(dav.text("note-261008-1328.md"))
+        assertNull(dav.text("note-261008-1328.assets/p.png"))
+    }
 }

@@ -11,7 +11,7 @@ long a note is meant to live.
   rendered, and only the block you tap turns into raw Markdown for editing. Supports headings,
   lists, checkboxes, code, links, images, strikethrough and LaTeX (`$…$`, `$$…$$`), plus
   undo/redo (in the formatting bar), a table of contents that jumps to a heading, and a source
-  mode. Tap the note's name at the top to rename it. The Markdown is kept verbatim: only the text you edit changes, so
+  mode. Tap the title at the top to rename the note's file. The Markdown is kept verbatim: only the text you edit changes, so
   notes stay as written for Obsidian, Typora and Nextcloud Notes on the desktop.
 - **Three tiers of notes** on one home screen: quick notes, pages and tagged notes (see below).
 - **Share target.** Text shared from other apps becomes a new quick note.
@@ -25,9 +25,16 @@ The app works on one folder on the server (default `/Notes`):
 
 | Location | Tier | Shown as |
 | --- | --- | --- |
-| `/Notes/*.md` | Quick notes (short-term) | Titled by their first line; file names are generated (`note-yyMMdd-HHmm.md`) |
+| `/Notes/*.md` | Quick notes (short-term) | File names are generated: `note-yyMMdd-HHmm_Title.md` |
 | `/Notes/Pages/` | Pages (long-term) | A single `.md` file, or a folder of notes (`Pages/Recipes/…`) |
 | `/Notes/Tags/` | Tagged notes (medium-term) | Directly in `Tags/` = untagged, `Tags/<Tag>/` = tagged with `<Tag>` (one tag per note) |
+
+Every note is titled by its first `# Heading`. Only a note without one falls back to its file name: the
+title part of a `note-…_Title` name, the first line of an older `note-yyMMdd-HHmm.md`, or (when it is
+empty) the moment it was made. A new note starts as `# New Note` with the title selected, so typing
+names it. When an edited note is closed, its file name follows the heading: `note-yyMMdd-HHmm_Title.md`
+for generated names (wherever the note is), just `Title.md` under `Pages/` (spaces become dashes).
+Other names are left alone, and a new note closed without any change is dropped again.
 
 Images and other attachments of a note live in `Name.assets/` next to `Name.md`. Other files and
 folders (such as `_archive/`) are synced but not shown, and dot-files and dot-folders (such as

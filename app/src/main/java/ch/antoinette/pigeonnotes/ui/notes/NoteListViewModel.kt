@@ -6,6 +6,7 @@ import ch.antoinette.pigeonnotes.AppGraph
 import ch.antoinette.pigeonnotes.data.local.db.LocalState
 import ch.antoinette.pigeonnotes.data.local.db.SyncEntry
 import ch.antoinette.pigeonnotes.data.sync.SyncStatus
+import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.domain.NotesRepository
 import ch.antoinette.pigeonnotes.domain.Structure
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,10 +88,10 @@ class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : Vie
 
     fun refresh() = graph.syncEngine.requestSync()
 
-    /** New note in this folder; in "All" it is a quick note. */
+    /** New note in this folder, opened with its placeholder title selected; in "All" it is a quick note. */
     fun createNote(onCreated: (String) -> Unit) {
         val folder = (scope as? ListScope.Folder)?.path ?: ""
-        viewModelScope.launch { onCreated(graph.notes.create(folder)) }
+        viewModelScope.launch { onCreated(graph.notes.create(folder, initialText = NoteText.NEW_NOTE_TEXT, selectTitle = true)) }
     }
 
     fun delete(path: String) {

@@ -282,7 +282,7 @@ fun AppSettingsScreen(
 
     if (creatingPage) {
         NameDialog(
-            title = "New page folder", initial = "", confirm = "Create", taken = pages.map { it.name },
+            title = "New page folder", initial = "", confirm = "Create", taken = pages.map { NoteText.title(it.path) },
             onDismiss = { creatingPage = false },
             onConfirm = { vm.createPageFolder(it); creatingPage = false },
         )
@@ -301,7 +301,7 @@ fun AppSettingsScreen(
             title = if (page == null) "Rename tag" else "Rename page",
             initial = name,
             confirm = "Rename",
-            taken = (if (page == null) tags else pages.map { it.name }) - name,
+            taken = (if (page == null) tags else pages.map { NoteText.title(it.path) }) - name,
             onDismiss = { renaming = null },
             onConfirm = { vm.rename(page, path, it); renaming = null },
         )
