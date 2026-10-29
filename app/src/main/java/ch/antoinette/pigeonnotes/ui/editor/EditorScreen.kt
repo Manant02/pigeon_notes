@@ -8,20 +8,25 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Toc
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
@@ -36,7 +41,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -44,13 +52,20 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -60,9 +75,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.antoinette.pigeonnotes.ui.graphViewModel
 import ch.antoinette.pigeonnotes.domain.Structure
+import ch.antoinette.pigeonnotes.domain.markdown.Toc
 import ch.antoinette.pigeonnotes.ui.notes.PagePickerDialog
 import ch.antoinette.pigeonnotes.ui.notes.TagPickerDialog
 import ch.antoinette.pigeonnotes.ui.theme.EditorType
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,6 +92,9 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
     var paging by remember { mutableStateOf(false) }
+    var showToc by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val structure by vm.structure.collectAsStateWithLifecycle(Structure())
 
     // Save when the app goes to the background.
@@ -104,17 +124,19 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 title = {
+                    // The note's title (its H1); tap it to rename the file.
                     Text(
                         vm.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(end = 8.dp),
+                        modifier = Modifier.clickable(onClickLabel = "Rename") { renaming = true }.padding(end = 8.dp),
                     )
                 },
                 navigationIcon = {
                     IconButton(onClick = { vm.document.commit(); vm.flush(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
-                    IconButton(onClick = vm::undo, enabled = vm.canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo") }
-                    IconButton(onClick = vm::redo, enabled = vm.canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo") }
+                    IconButton(onClick = { showToc = true }, enabled = !vm.sourceMode) {
+                        Icon(Icons.AutoMirrored.Filled.Toc, "Table of contents")
+                    }
                     IconButton(onClick = { vm.toggleSourceMode() }) {
                         Icon(Icons.Default.Code, "Source", tint = if (vm.sourceMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -163,12 +185,16 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
                         lineLimits = TextFieldLineLimits.MultiLine(),
                     )
                 } else {
-                    HybridEditor(vm, palette, onOpenLink = openLink)
+                    HybridEditor(vm, palette, onOpenLink = openLink, listState = listState)
                 }
             }
             if (vm.document.active != null || vm.sourceMode) {
                 EditorToolbar(
                     field = if (vm.sourceMode) vm.sourceField else vm.document.active?.field,
+                    canUndo = vm.canUndo,
+                    canRedo = vm.canRedo,
+                    onUndo = vm::undo,
+                    onRedo = vm::redo,
                     onDone = { if (vm.sourceMode) vm.toggleSourceMode() else vm.document.commit() },
                     onPickImage = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     modifier = Modifier.zIndex(1f).background(MaterialTheme.colorScheme.surfaceContainer).fillMaxWidth(),
@@ -198,13 +224,63 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
         )
     }
 
+    if (showToc) {
+        val toc = Toc.of(vm.document.blocks)
+        ModalBottomSheet(onDismissRequest = { showToc = false }) {
+            Text(
+                "Contents", style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            if (toc.isEmpty()) {
+                Text(
+                    "This note has no headings.", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                )
+            }
+            LazyColumn(Modifier.padding(bottom = 16.dp)) {
+                items(toc, key = { it.index }) { entry ->
+                    ListItem(
+                        headlineContent = {
+                            Text(
+                                entry.text.ifEmpty { "(empty heading)" }, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                style = if (entry.level == 1) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyLarge,
+                            )
+                        },
+                        colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                        modifier = Modifier
+                            .clickable {
+                                showToc = false
+                                // Leaving edit mode can change the block list, so the heading is found again by id.
+                                vm.document.commit()
+                                val index = vm.document.blocks.indexOfFirst { it.id == entry.id }.takeIf { it >= 0 } ?: entry.index
+                                scope.launch { listState.animateScrollToItem(index) }
+                            }
+                            .padding(start = (16 * (entry.level - 1)).dp),
+                    )
+                }
+            }
+        }
+    }
+
     if (renaming) {
-        var name by remember { mutableStateOf(vm.fileName) }
+        // The whole name is selected, so typing replaces it and a tap places the cursor to adjust it.
+        var name by remember { mutableStateOf(TextFieldValue(vm.fileName, TextRange(0, vm.fileName.length))) }
+        val focus = remember { FocusRequester() }
+        val rename = { if (name.text.isNotBlank()) vm.rename(name.text.trim()); renaming = false }
         AlertDialog(
             onDismissRequest = { renaming = false },
             title = { Text("Rename note") },
-            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Title") }) },
-            confirmButton = { TextButton(onClick = { vm.rename(name); renaming = false }) { Text("Rename") } },
+            text = {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it }, singleLine = true, label = { Text("File name") },
+                    suffix = { Text(".md") },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { rename() }),
+                    modifier = Modifier.focusRequester(focus),
+                )
+                LaunchedEffect(Unit) { focus.requestFocus() }
+            },
+            confirmButton = { TextButton(onClick = rename, enabled = name.text.isNotBlank()) { Text("Rename") } },
             dismissButton = { TextButton(onClick = { renaming = false }) { Text("Cancel") } },
         )
     }

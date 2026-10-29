@@ -10,7 +10,8 @@ long a note is meant to live.
 - **Block-hybrid Markdown editor.** Native Jetpack Compose, no WebView: the note is shown
   rendered, and only the block you tap turns into raw Markdown for editing. Supports headings,
   lists, checkboxes, code, links, images, strikethrough and LaTeX (`$…$`, `$$…$$`), plus
-  undo/redo and a source mode. The Markdown is kept verbatim: only the text you edit changes, so
+  undo/redo (in the formatting bar), a table of contents that jumps to a heading, and a source
+  mode. Tap the title at the top to rename the note's file. The Markdown is kept verbatim: only the text you edit changes, so
   notes stay as written for Obsidian, Typora and Nextcloud Notes on the desktop.
 - **Three tiers of notes** on one home screen: quick notes, pages and tagged notes (see below).
 - **Share target.** Text shared from other apps becomes a new quick note.
