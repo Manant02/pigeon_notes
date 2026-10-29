@@ -77,12 +77,6 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     var paging by remember { mutableStateOf(false) }
     val structure by vm.structure.collectAsStateWithLifecycle(Structure())
 
-    // No sync while the note is open; whatever was requested meanwhile runs when the screen closes.
-    DisposableEffect(vm) {
-        vm.holdSync()
-        onDispose { vm.releaseSync() }
-    }
-
     // Save when the app goes to the background.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -205,7 +199,7 @@ fun EditorScreen(path: String, onBack: () -> Unit) {
     }
 
     if (renaming) {
-        var name by remember { mutableStateOf(vm.title) }
+        var name by remember { mutableStateOf(vm.fileName) }
         AlertDialog(
             onDismissRequest = { renaming = false },
             title = { Text("Rename note") },

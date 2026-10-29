@@ -12,15 +12,17 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
+import java.util.concurrent.ConcurrentHashMap
 
 /** A long-term page: one markdown file directly in `Pages/`, or a folder of notes there. */
 sealed interface Page {
     val path: String
     val name: String get() = NoteText.title(path)
 
+    /** Shown by its H1 like any note (see [NoteText.index]). */
     data class Single(val entry: SyncEntry) : Page {
         override val path get() = entry.path
+        override val name get() = entry.title.ifEmpty { NoteText.title(path) }
     }
 
     /** [notes] newest first. */
@@ -169,14 +171,22 @@ class NotesRepository(
     }
 
     /**
-     * Creates a note in [folder] with a unique name and returns its path. In the root (`""`) it is a
-     * quick note named after the moment it was made; elsewhere [title] names the file.
+     * Notes created since the app started that no editor has opened yet, with whether the editor
+     * should select their title. See [takeFresh].
      */
-    suspend fun create(folder: String, title: String? = null, initialText: String = ""): String =
+    private val fresh = ConcurrentHashMap<String, Boolean>()
+
+    /**
+     * Creates a note in [folder] with a unique name and returns its path. With a [title] that names
+     * the file; otherwise the name follows the H1 of [initialText] ([NoteText.newStem]): a
+     * `note-yyMMdd-HHmm_Title` name, or just the title under `Pages/`. [selectTitle] asks the editor
+     * to open the note with its title selected, so typing replaces it.
+     */
+    suspend fun create(folder: String, title: String? = null, initialText: String = "", selectTitle: Boolean = false): String =
         withContext(Dispatchers.IO) {
             ensureDir(folder)
             val stem = title?.let { NoteText.sanitizeFileName(it) }
-                ?: if (folder.isEmpty()) "note-" + LocalDateTime.now().format(QUICK_STAMP) else "Untitled"
+                ?: NoteText.newStem(folder, NoteText.heading(initialText), LocalDateTime.now())
             val path = uniquePath(folder, stem, ".md")
             val mtime = files.write(path, initialText)
             val (indexTitle, preview) = NoteText.index(path, initialText)
@@ -186,8 +196,25 @@ class NotesRepository(
                     title = indexTitle, preview = preview, modified = mtime,
                 )
             )
+            fresh[path] = selectTitle
             path
         }
+
+    /**
+     * Whether [path] was just made by [create] (and if so, whether to select its title), or null.
+     * Answers once: the editor opening the note takes it.
+     */
+    fun takeFresh(path: String): Boolean? = fresh.remove(path)
+
+    /**
+     * Gives a note the file name its H1 asks for ([NoteText.nameForTitle]), carrying its assets
+     * along. Returns the new path, or null when the name stays.
+     */
+    suspend fun renameToTitle(path: String): String? {
+        if (!files.exists(path)) return null
+        val stem = NoteText.nameForTitle(path, read(path)) ?: return null
+        return move(path, newTitle = stem).takeIf { it != path }
+    }
 
     /** Renames a note (and its assets folder, rewriting the links inside). Returns the new path. */
     suspend fun rename(path: String, newTitle: String): String = move(path, newTitle = newTitle)
@@ -383,7 +410,6 @@ class NotesRepository(
         const val SAVE_SYNC_DELAY_MS = 1500L
         const val PAGES_DIR = "Pages"
         const val TAGS_DIR = "Tags"
-        private val QUICK_STAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyMMdd-HHmm")
 
         /** The tag of a note under [TAGS_DIR]: null when it sits directly in the folder (untagged) or elsewhere. */
         fun tagOf(path: String): String? {

@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.lifecycleScope
+import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.ui.nav.PigeonNavGraph
 import ch.antoinette.pigeonnotes.ui.theme.PigeonTheme
 import kotlinx.coroutines.launch
@@ -32,15 +33,18 @@ class MainActivity : ComponentActivity() {
         handleShare(intent)
     }
 
-    /** "Share to Pigeon Notes": text (or a URL) becomes a new quick note; a subject becomes its first line. */
+    /**
+     * "Share to Pigeon Notes": text (or a URL) becomes a new quick note. Its H1 is the subject, or a
+     * placeholder, and opens selected so it can be renamed right away.
+     */
     private fun handleShare(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND || intent.type != "text/plain") return
         val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.takeIf { it.isNotBlank() }
-        val body = if (subject != null && !text.startsWith(subject)) "$subject\n\n$text\n" else text + "\n"
+        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.trim()?.takeIf { it.isNotEmpty() && !text.startsWith(it) }
+        val body = "# ${subject?.lines()?.joinToString(" ") ?: NoteText.SHARED_NOTE_TITLE}\n\n${text.trimEnd()}\n"
         intent.action = null // consume, so rotation does not re-share
         lifecycleScope.launch {
-            sharedNotePath = AppGraph.get(this@MainActivity).notes.create("", initialText = body)
+            sharedNotePath = AppGraph.get(this@MainActivity).notes.create("", initialText = body, selectTitle = true)
         }
     }
 }

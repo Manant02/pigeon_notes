@@ -182,6 +182,20 @@ class DocumentModel(
         openEnd()
     }
 
+    /**
+     * Makes the note's first block editable with the text of its `# Title` selected, so typing
+     * replaces it (a new note's placeholder title). False, and nothing changes, when the note
+     * doesn't start with a one-line level-1 heading.
+     */
+    fun selectTitle(): Boolean {
+        commit()
+        val index = blocks.indexOfFirst { it.kind != BlockKind.EMPTY }
+        val b = blocks.getOrNull(index)?.takeIf { it.kind == BlockKind.HEADING && it.level == 1 } ?: return false
+        val title = ATX_TITLE.matchEntire(b.source)?.groups?.get(1)?.range ?: return false
+        active = ActiveBlock(index, b.id, b.kind, b.level, TextFieldState(b.source, TextRange(title.first, title.last + 1)))
+        return true
+    }
+
     private fun openEnd() {
         active = ActiveBlock(blocks.size, newId(), BlockKind.PARAGRAPH, 0, TextFieldState(), virtual = true)
     }
@@ -570,5 +584,8 @@ class DocumentModel(
         /** Keystrokes closer together than this undo as one step. */
         const val TYPING_GROUP_MS = 1_000L
         const val HISTORY_LIMIT = 200
+
+        /** `# Title`: group 1 is the title text, without the spaces around it. */
+        private val ATX_TITLE = Regex("""#[ \t]+(\S(?:.*\S)?)[ \t]*""")
     }
 }

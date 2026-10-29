@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ch.antoinette.pigeonnotes.data.sync.SyncStatus
+import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.ui.graphViewModel
 
 /**
@@ -217,7 +218,7 @@ fun HomeScreen(
             title = if (folder) "New page folder" else "New page",
             initial = "",
             confirm = "Create",
-            taken = state.pages.map { it.name },
+            taken = state.pages.map { NoteText.title(it.path) },
             onDismiss = { namingPage = null },
             onConfirm = { name ->
                 namingPage = null

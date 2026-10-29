@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import ch.antoinette.pigeonnotes.AppGraph
 import ch.antoinette.pigeonnotes.data.sync.SyncStatus
+import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.domain.NotesRepository
 import ch.antoinette.pigeonnotes.domain.Page
 import ch.antoinette.pigeonnotes.domain.Structure
@@ -102,14 +103,14 @@ class HomeViewModel(private val graph: AppGraph) : ViewModel() {
 
     fun refresh() = graph.syncEngine.requestSync()
 
-    /** The FAB: a new quick note. */
+    /** The FAB: a new quick note, opened with its placeholder title selected. */
     fun createQuickNote(onCreated: (String) -> Unit) {
-        viewModelScope.launch { onCreated(graph.notes.create("")) }
+        viewModelScope.launch { onCreated(graph.notes.create("", initialText = NoteText.NEW_NOTE_TEXT, selectTitle = true)) }
     }
 
-    /** A new standalone page, opened right away. */
+    /** A new standalone page named [title] (which also becomes its H1), opened right away. */
     fun createPage(title: String, onCreated: (String) -> Unit) {
-        viewModelScope.launch { onCreated(graph.notes.create(NotesRepository.PAGES_DIR, title)) }
+        viewModelScope.launch { onCreated(graph.notes.create(NotesRepository.PAGES_DIR, title, "# ${title.trim()}\n")) }
     }
 
     fun createPageFolder(name: String) {
