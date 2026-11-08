@@ -47,8 +47,11 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
     /** The note's tag: `""` when untagged under `Tags/`, null when not under `Tags/` at all. */
     val tag: String? get() = if (path.startsWith(NotesRepository.TAGS_DIR + "/")) NotesRepository.tagOf(path) ?: "" else null
 
-    /** The note's page folder name: `""` for a standalone page, null when not under `Pages/`. */
-    val pageFolder: String? get() = if (path.startsWith(NotesRepository.PAGES_DIR + "/")) NotesRepository.pageFolderOf(path)?.substringAfterLast('/') ?: "" else null
+    /**
+     * The note's page folder relative to `Pages/` (`Recipes` or `Recipes/Asian`): `""` for a
+     * standalone page, null when not under `Pages/`.
+     */
+    val pageFolder: String? get() = if (path.startsWith(NotesRepository.PAGES_DIR + "/")) NotesRepository.pageFolderOf(path)?.removePrefix(NotesRepository.PAGES_DIR + "/") ?: "" else null
 
     /** Whole-document field used in source mode. */
     val sourceField = TextFieldState()
@@ -59,7 +62,10 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
     private var saveJob: Job? = null
     private var lastSaved: String? = null
 
-    /** Just created by [NotesRepository.create]: dropped again on close if still exactly a blank new note. */
+    /**
+     * Just created by [NotesRepository.create]: dropped again on close if still exactly a blank new
+     * note, and the only kind of note inside a page folder whose file name follows its H1.
+     */
     private var fresh = false
     /** The text changed while open: only then does the file name follow the H1 on close. */
     private var edited = false
@@ -219,7 +225,7 @@ class EditorViewModel(private val graph: AppGraph, initialPath: String) : ViewMo
                     drop -> graph.notes.delete(p)
                     else -> {
                         graph.notes.save(p, text)
-                        val renamed = if (rename) graph.notes.renameToTitle(p) else null
+                        val renamed = if (rename) graph.notes.renameToTitle(p, fresh) else null
                         // A standalone page's order and colour are kept by path.
                         if (renamed != null && p.substringBeforeLast('/', "") == NotesRepository.PAGES_DIR) {
                             graph.settings.renamePageRefs(p, renamed)

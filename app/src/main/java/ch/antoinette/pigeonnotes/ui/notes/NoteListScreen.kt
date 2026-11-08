@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.CloudDone
@@ -90,8 +91,13 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 /**
- * One folder of notes (a page folder, with the page's accent), the archive, or every note for
- * searching. Long-press selects; the selection can be archived, deleted, tagged or added to a page.
+ * One folder of notes (a page folder or a folder inside one, with the page's accent), the archive,
+ * or every note for searching. Long-press selects; the selection can be archived, deleted, tagged
+ * or added to a page.
+ *
+ * A folder is shown as a tree under a breadcrumb of where it is: its sub-folders, which open in
+ * place or, tapped, on a screen of their own ([onOpenFolder]), and its notes.
+ * [onOpenCrumb] goes back up to a folder named in the breadcrumb (`Pages` = the home screen).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +106,8 @@ fun NoteListScreen(
     startSearching: Boolean = false,
     onBack: () -> Unit,
     onOpenNote: (String) -> Unit,
+    onOpenFolder: (String) -> Unit = {},
+    onOpenCrumb: (String) -> Unit = {},
     onOpenSyncSettings: () -> Unit,
     onOpenAppSettings: () -> Unit,
     vm: NoteListViewModel = graphViewModel(key = "list:$scope") { NoteListViewModel(it, scope) },
@@ -109,6 +117,11 @@ fun NoteListScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
     var paging by remember { mutableStateOf(false) }
+    var creatingFolder by remember { mutableStateOf(false) }
+    var folderOptions by remember { mutableStateOf<String?>(null) }
+    var renamingFolder by remember { mutableStateOf<String?>(null) }
+    val notEmpty by vm.notEmpty.collectAsStateWithLifecycle()
+    val inFolder = scope is ListScope.Folder
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val inArchive = scope == ListScope.Archive
     val accent = state.accent.color()
@@ -137,6 +150,9 @@ fun NoteListScreen(
                         IconButton(onClick = { searching = !searching; if (!searching) vm.search("") }) {
                             Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "Search")
                         }
+                        if (inFolder) {
+                            IconButton(onClick = { creatingFolder = true }) { Icon(Icons.Outlined.CreateNewFolder, "New folder") }
+                        }
                         SyncStatusIcon(state.status, state.pendingCount, onClick = onOpenSyncSettings)
                         IconButton(onClick = onOpenAppSettings) { Icon(Icons.Default.Settings, "Settings") }
                     },
@@ -162,6 +178,9 @@ fun NoteListScreen(
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            if (state.crumbs.isNotEmpty()) {
+                Breadcrumbs(state.crumbs, accent, onCrumb = onOpenCrumb)
+            }
             if (searching) {
                 TextField(
                     value = state.query,
@@ -180,9 +199,27 @@ fun NoteListScreen(
                 onRefresh = vm::refresh,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (state.rows.isEmpty()) {
+                val tree = state.tree
+                if (tree != null && tree.isNotEmpty()) {
+                    FolderTreeList(
+                        items = tree,
+                        accent = accent,
+                        accentContainer = state.accent.container(),
+                        picked = state.picked,
+                        onOpenNote = onOpenNote,
+                        onOpenFolder = onOpenFolder,
+                        onToggleFolder = vm::toggleExpanded,
+                        onFolderOptions = { folderOptions = it },
+                        onToggleNote = vm.selection::toggle,
+                        onDeleteNote = vm::delete,
+                    )
+                } else if (tree != null || state.rows.isEmpty()) {
                     Text(
-                        if (state.query.isNotEmpty()) "Nothing matches." else "No notes here yet.",
+                        when {
+                            state.query.isNotEmpty() -> "Nothing matches."
+                            inFolder -> "This folder is empty. Add a note with +, or a folder with the folder button above."
+                            else -> "No notes here yet."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(16.dp),
@@ -231,6 +268,42 @@ fun NoteListScreen(
         tagging = tagging, onTaggingChange = { tagging = it },
         paging = paging, onPagingChange = { paging = it },
     )
+
+    if (creatingFolder) {
+        NameDialog(
+            title = "New folder in “${state.title}”",
+            initial = "",
+            confirm = "Create",
+            taken = state.subfolders,
+            onDismiss = { creatingFolder = false },
+            onConfirm = { vm.createSubfolder(it); creatingFolder = false },
+        )
+    }
+    folderOptions?.let { path ->
+        FolderOptionsDialog(
+            name = path.substringAfterLast('/'),
+            onDismiss = { folderOptions = null },
+            onRename = { folderOptions = null; renamingFolder = path },
+            onDelete = { folderOptions = null; vm.deleteFolder(path) },
+        )
+    }
+    renamingFolder?.let { path ->
+        val name = path.substringAfterLast('/')
+        val siblings = state.structure.folders
+            .filter { it.substringBeforeLast('/', "") == path.substringBeforeLast('/', "") && it != path }
+            .map { it.substringAfterLast('/') }
+        NameDialog(
+            title = "Rename folder",
+            initial = name,
+            confirm = "Rename",
+            taken = siblings,
+            onDismiss = { renamingFolder = null },
+            onConfirm = { vm.renameFolder(path, it); renamingFolder = null },
+        )
+    }
+    notEmpty?.let { (path, remaining) ->
+        FolderNotEmptyDialog(path.substringAfterLast('/'), remaining, onDismiss = { vm.notEmpty.value = null })
+    }
 }
 
 /** The delete / tag / add-to-page dialogs for a selection, shared by the home screen and note lists. */
@@ -313,24 +386,7 @@ fun NoteListRow(
     onLongClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState()
-    LaunchedEffect(dismissState.currentValue) {
-        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
-            onDelete(); dismissState.reset()
-        }
-    }
-    SwipeToDismissBox(
-        state = dismissState,
-        enableDismissFromStartToEnd = false,
-        gesturesEnabled = !selecting, // swiping would fight the selection
-
-        backgroundContent = {
-            Box(
-                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp),
-                contentAlignment = Alignment.CenterEnd,
-            ) { Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.onErrorContainer) }
-        },
-    ) {
+    SwipeToDelete(enabled = !selecting, onDelete = onDelete) { // swiping would fight the selection
         ListItem(
             modifier = Modifier
                 .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.background)
@@ -357,6 +413,29 @@ fun NoteListRow(
             },
         )
     }
+}
+
+/** Swiping the row to the start deletes the note. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SwipeToDelete(enabled: Boolean, onDelete: () -> Unit, content: @Composable () -> Unit) {
+    val dismissState = rememberSwipeToDismissBoxState()
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue == SwipeToDismissBoxValue.EndToStart) {
+            onDelete(); dismissState.reset()
+        }
+    }
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        gesturesEnabled = enabled,
+        backgroundContent = {
+            Box(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) { Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.onErrorContainer) }
+        },
+    ) { content() }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -396,7 +475,7 @@ fun NoteTile(row: NoteRow, selected: Boolean, onClick: () -> Unit, onLongClick: 
 }
 
 @Composable
-private fun StatusDot(row: NoteRow) {
+internal fun StatusDot(row: NoteRow) {
     if (row.error != null) {
         Icon(Icons.Outlined.ErrorOutline, "Sync error", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
     } else if (row.pending) {

@@ -25,7 +25,7 @@ sealed interface Page {
         override val name get() = entry.title.ifEmpty { NoteText.title(path) }
     }
 
-    /** [notes] newest first. */
+    /** [notes]: every note in the folder and its sub-folders, newest first. */
     data class Folder(override val path: String, val notes: List<SyncEntry>) : Page
 }
 
@@ -37,8 +37,17 @@ data class Structure(
     val tags: List<String> = emptyList(),
     /** Every note under `Tags/`, tagged or not, newest first. */
     val tagged: List<SyncEntry> = emptyList(),
+    /** Every folder in the tree except `*.assets` folders and what is inside them. */
+    val folders: List<String> = emptyList(),
 ) {
-    val pageFolders: List<String> get() = pages.filterIsInstance<Page.Folder>().map { it.name }
+    /**
+     * Every folder under `Pages/`, nested ones included, relative to it (`Recipes`,
+     * `Recipes/Asian`), sorted so that each folder comes right before its sub-folders.
+     */
+    val pageFolders: List<String> get() = folders
+        .filter { it.startsWith(NotesRepository.PAGES_DIR + "/") }
+        .map { it.removePrefix(NotesRepository.PAGES_DIR + "/") }
+        .sortedWith(compareBy<String> { it.lowercase().replace('/', '\u0000') })
 }
 
 /**
@@ -59,16 +68,17 @@ class NotesRepository(
      * Anything else in the tree is left alone and simply not shown.
      */
     val structure: Flow<Structure> = combine(dao.observeNotes(), dao.observeDirs()) { notes, dirs ->
-        val folders = dirs.map { it.path }.filter { !it.endsWith(".assets") }
+        val folders = dirs.map { it.path }.filter { dir -> dir.split('/').none { it.endsWith(".assets") } }
         val pageFolders = folders.filter { it.parentPath() == PAGES_DIR }
         val singles = notes.filter { it.parent == PAGES_DIR }.map { Page.Single(it) }
-        val pages: List<Page> = (singles + pageFolders.map { dir -> Page.Folder(dir, notes.filter { it.parent == dir }) })
+        val pages: List<Page> = (singles + pageFolders.map { dir -> Page.Folder(dir, notes.filter { it.path.startsWith("$dir/") }) })
             .sortedBy { it.name.lowercase() }
         Structure(
             quick = notes.filter { it.parent.isEmpty() },
             pages = pages,
             tags = folders.filter { it.parentPath() == TAGS_DIR }.map { it.substringAfterLast('/') }.sortedBy { it.lowercase() },
             tagged = notes.filter { it.parent == TAGS_DIR || it.parent.parentPath() == TAGS_DIR },
+            folders = folders.sorted(),
         )
     }
 
@@ -115,8 +125,8 @@ class NotesRepository(
     }
 
     /**
-     * Creates a page folder (`parent` = [PAGES_DIR]) or a tag (`parent` = [TAGS_DIR]) and returns
-     * its path, or null if the name is taken.
+     * Creates a page folder (`parent` = [PAGES_DIR]), a folder inside one (`parent` = its path)
+     * or a tag (`parent` = [TAGS_DIR]) and returns its path, or null if the name is taken.
      */
     suspend fun createFolder(parent: String, name: String): String? = withContext(Dispatchers.IO) {
         val clean = NoteText.sanitizeFileName(name)
@@ -208,11 +218,12 @@ class NotesRepository(
 
     /**
      * Gives a note the file name its H1 asks for ([NoteText.nameForTitle]), carrying its assets
-     * along. Returns the new path, or null when the name stays.
+     * along. [fresh] marks a note [create] made in this editing session. Returns the new path, or
+     * null when the name stays.
      */
-    suspend fun renameToTitle(path: String): String? {
+    suspend fun renameToTitle(path: String, fresh: Boolean = false): String? {
         if (!files.exists(path)) return null
-        val stem = NoteText.nameForTitle(path, read(path)) ?: return null
+        val stem = NoteText.nameForTitle(path, read(path), fresh) ?: return null
         return move(path, newTitle = stem).takeIf { it != path }
     }
 
@@ -417,7 +428,7 @@ class NotesRepository(
             return if (parent.startsWith("$TAGS_DIR/")) parent.removePrefix("$TAGS_DIR/") else null
         }
 
-        /** The page folder a note is in, or null. */
+        /** The page folder a note is in (the innermost one, e.g. `Pages/Recipes/Asian`), or null. */
         fun pageFolderOf(path: String): String? {
             val parent = if ('/' in path) path.substringBeforeLast('/') else return null
             return parent.takeIf { it.startsWith("$PAGES_DIR/") }
