@@ -49,9 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -68,8 +66,7 @@ private fun indentOf(depth: Int): Dp = TreeStart + IndentStep * depth
 
 /**
  * A folder's contents as a tree: sub-folders first, each with a round button on the right that
- * opens it in place (its contents slide in below, indented, with a guide line down from the
- * folder's icon), then the notes. Tapping a folder itself enters it.
+ * opens it in place (its contents slide in below, indented), then the notes. Tapping a folder itself enters it.
  */
 @Composable
 fun FolderTreeList(
@@ -85,10 +82,9 @@ fun FolderTreeList(
     onDeleteNote: (String) -> Unit,
 ) {
     val selecting = picked.isNotEmpty()
-    val guide = accent.copy(alpha = 0.35f)
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
         items(items, key = { it.key }, contentType = { it::class }) { item ->
-            Column(Modifier.animateItem().treeGuides(item.depth, guide)) {
+            Column(Modifier.animateItem()) {
                 when (item) {
                     is TreeItem.Folder -> TreeFolderRow(
                         item, accent, accentContainer,
@@ -121,22 +117,6 @@ fun FolderTreeList(
         }
     }
 }
-
-/**
- * One vertical line per enclosing open folder, running down from the centre of that folder's
- * icon, so the contents of an expanded folder read as hanging from it. Drawn over the row, not
- * behind it: note rows paint their own background, which would hide the line except in the gaps
- * between rows.
- */
-private fun Modifier.treeGuides(depth: Int, color: Color): Modifier =
-    if (depth == 0) this else drawWithContent {
-        drawContent()
-        val stroke = 2.dp.toPx()
-        for (level in 0 until depth) {
-            val x = (indentOf(level) + FolderIconSize / 2).toPx()
-            drawLine(color, Offset(x, 0f), Offset(x, size.height), strokeWidth = stroke)
-        }
-    }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
