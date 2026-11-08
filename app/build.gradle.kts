@@ -11,6 +11,18 @@ val commitCount: Int = providers.exec {
     isIgnoreExitValue = true
 }.standardOutput.asText.get().trim().toIntOrNull() ?: 1
 
+// The commit the APK is built from, and its time: the update check uses them to recognise the
+// installed build among the GitHub releases (each release records its commit) and to tell which
+// test builds came after it.
+val commitId: String = providers.exec {
+    commandLine("git", "rev-parse", "HEAD")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim()
+val commitTime: Long = providers.exec {
+    commandLine("git", "log", "-1", "--format=%ct")
+    isIgnoreExitValue = true
+}.standardOutput.asText.get().trim().toLongOrNull() ?: 0L
+
 android {
     namespace = "ch.antoinette.pigeonnotes"
     compileSdk = 37
@@ -23,6 +35,11 @@ android {
         // CI test builds of a branch pass the version of the main commit they are based on (build.yml).
         versionCode = providers.gradleProperty("pigeon.versionCode").orNull?.toInt() ?: commitCount
         versionName = providers.gradleProperty("pigeon.versionName").orNull ?: "0.1.$commitCount"
+
+        buildConfigField("String", "GIT_COMMIT", "\"$commitId\"")
+        buildConfigField("long", "GIT_COMMIT_TIME", "${commitTime}L")
+        // Where the app looks for updates: the releases CI publishes (see .github/workflows/build.yml).
+        buildConfigField("String", "UPDATE_REPO", "\"Manant02/pigeon_notes\"")
     }
 
     signingConfigs {
@@ -50,6 +67,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
@@ -96,4 +114,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    // Android's org.json is only a stub in JVM unit tests; the update check parses GitHub's JSON with it.
+    testImplementation(libs.json)
 }

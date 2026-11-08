@@ -34,6 +34,11 @@ import androidx.compose.material.icons.outlined.Label
 import androidx.compose.material.icons.outlined.NewLabel
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Switch
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.SystemUpdate
+import ch.antoinette.pigeonnotes.data.update.UpdateState
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -53,6 +58,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -76,6 +82,16 @@ import kotlinx.coroutines.launch
 class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
     val tileView = graph.settings.tileView
     val pageRows = graph.settings.pageRows
+    val testBuilds = graph.settings.testBuilds
+    val update = graph.updater.state
+    val installed = graph.updater.installed
+
+    fun setTestBuilds(enabled: Boolean) {
+        viewModelScope.launch { graph.settings.setTestBuilds(enabled) }
+    }
+
+    /** Found updates open the dialog shown over every screen ([ch.antoinette.pigeonnotes.ui.update.UpdatePrompt]). */
+    fun checkForUpdates() = graph.updater.check(manual = true)
 
     /** Every page, in the user's saved order. */
     val pages: Flow<List<Page>> = combine(graph.notes.structure, graph.settings.pageOrder) { s, order ->
@@ -145,6 +161,8 @@ fun AppSettingsScreen(
     val tags by vm.tags.collectAsStateWithLifecycle(emptyList())
     val colors by vm.colors.collectAsStateWithLifecycle(emptyMap())
     val notEmpty by vm.notEmpty.collectAsStateWithLifecycle()
+    val testBuilds by vm.testBuilds.collectAsStateWithLifecycle(false)
+    val update by vm.update.collectAsStateWithLifecycle()
     var reordering by remember { mutableStateOf(false) }
     var creatingPage by remember { mutableStateOf(false) }
     var creatingTag by remember { mutableStateOf(false) }
@@ -251,6 +269,38 @@ fun AppSettingsScreen(
                 leadingContent = { Icon(Icons.Outlined.NewLabel, null) },
                 modifier = Modifier.clickable { creatingTag = true },
             )
+
+            SectionTitle("Updates")
+            val checking = update is UpdateState.Checking
+            ListItem(
+                headlineContent = { Text("Check for updates") },
+                supportingContent = {
+                    Text(
+                        when (val u = update) {
+                            UpdateState.Checking -> "Checking…"
+                            UpdateState.UpToDate -> "Up to date"
+                            is UpdateState.CheckFailed -> "Couldn’t check: ${u.message}"
+                            is UpdateState.Available -> "${u.release.versionName} is available"
+                            else -> "Installed: ${vm.installed.versionName}" +
+                                vm.installed.commit.take(7).let { if (it.isEmpty()) "" else " ($it)" }
+                        },
+                        color = if (update is UpdateState.CheckFailed) MaterialTheme.colorScheme.error else Color.Unspecified,
+                    )
+                },
+                leadingContent = { Icon(Icons.Outlined.SystemUpdate, null) },
+                trailingContent = if (checking) ({ CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }) else null,
+                modifier = Modifier.clickable(enabled = !checking, onClick = vm::checkForUpdates),
+            )
+            ListItem(
+                headlineContent = { Text("Test builds") },
+                supportingContent = {
+                    Text("Also offer the newest test build of a branch, before it is merged. These can be unfinished.")
+                },
+                leadingContent = { Icon(Icons.Outlined.Science, null) },
+                trailingContent = { Switch(checked = testBuilds, onCheckedChange = vm::setTestBuilds) },
+                modifier = Modifier.clickable { vm.setTestBuilds(!testBuilds) },
+            )
+            Spacer(Modifier.height(24.dp))
         }
     }
 

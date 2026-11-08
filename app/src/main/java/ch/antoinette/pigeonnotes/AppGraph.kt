@@ -8,6 +8,7 @@ import ch.antoinette.pigeonnotes.data.remote.LoginFlowV2
 import ch.antoinette.pigeonnotes.data.remote.WebDavClient
 import ch.antoinette.pigeonnotes.data.sync.ConnectivityObserver
 import ch.antoinette.pigeonnotes.data.sync.SyncEngine
+import ch.antoinette.pigeonnotes.data.update.Updater
 import ch.antoinette.pigeonnotes.domain.NotesRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,7 @@ class AppGraph private constructor(context: Context) {
     val syncEngine = SyncEngine(settings, db.syncDao(), files, http, appScope)
     val notes = NotesRepository(files, db.syncDao(), syncEngine)
     val connectivity = ConnectivityObserver(context) { syncEngine.requestSync(delayMillis = 500) }
+    val updater = Updater(context, http, settings, appScope)
 
     companion object {
         @Volatile private var instance: AppGraph? = null

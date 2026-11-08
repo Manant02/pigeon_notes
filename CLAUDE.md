@@ -54,6 +54,9 @@ layout. Read it first.
   with the version of the `main` commit the branch is based on, so the owner can try a change
   before merging. Merge `main` into the branch when it has moved on, or the test build has a lower
   version than the installed release and won't install.
+- The app updates itself from those releases (`data/update/`): it relies on the APK names
+  (`pigeon-notes-<versionName>.apk`), on each release targeting its exact commit (`--target
+  $GITHUB_SHA`) and on the repo being public. Keep these when changing `build.yml`.
 
 ## Signing
 

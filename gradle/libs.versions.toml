@@ -17,6 +17,7 @@ coil = "3.6.2"
 jbMarkdown = "0.7.14"
 jlatexmath = "0.2.0"
 junit = "4.13.2"
+json = "20240303"
 
 [libraries]
 core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -51,6 +52,7 @@ jb-markdown = { group = "org.jetbrains", name = "markdown", version.ref = "jbMar
 jlatexmath = { group = "ru.noties", name = "jlatexmath-android", version.ref = "jlatexmath" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+json = { group = "org.json", name = "json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

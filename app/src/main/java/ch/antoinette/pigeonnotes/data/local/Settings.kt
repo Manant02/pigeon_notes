@@ -44,6 +44,22 @@ class Settings(private val context: Context) : AccountSource {
         val pageRows = intPreferencesKey("page_rows")
         val pageOrder = stringPreferencesKey("page_order")
         val pageColors = stringPreferencesKey("page_colors")
+        val testBuilds = booleanPreferencesKey("test_builds")
+        val skippedUpdate = stringPreferencesKey("skipped_update")
+    }
+
+    /** Offer test builds of branches (pre-releases) as updates, not only releases. */
+    val testBuilds: Flow<Boolean> = context.dataStore.data.map { it[Keys.testBuilds] ?: false }
+
+    suspend fun setTestBuilds(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.testBuilds] = enabled }
+    }
+
+    /** The commit of the update the user chose to skip: not offered again on startup. */
+    val skippedUpdate: Flow<String?> = context.dataStore.data.map { it[Keys.skippedUpdate] }
+
+    suspend fun setSkippedUpdate(commit: String) {
+        context.dataStore.edit { it[Keys.skippedUpdate] = commit }
     }
 
     /** Show note lists as Keep-style tiles instead of rows. */
