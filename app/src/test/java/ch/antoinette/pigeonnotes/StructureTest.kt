@@ -189,12 +189,42 @@ class StructureTest {
         val page = runBlocking { repo.create("Pages/Recipes", initialText = NoteText.NEW_NOTE_TEXT) }
         assertEquals("Pages/Recipes/New-Note.md", page)
         runBlocking { repo.save(page, "# Lasagne al forno\n") }
-        assertEquals("Pages/Recipes/Lasagne-al-forno.md", runBlocking { repo.renameToTitle(page) })
+        assertNull("notes in page folders keep their name", runBlocking { repo.renameToTitle(page) })
+        assertEquals("Pages/Recipes/Lasagne-al-forno.md", runBlocking { repo.renameToTitle(page, fresh = true) })
 
         sync()
         assertEquals("# Groceries\n\nmilk\n", dav.text("${stamp}_Groceries.md"))
         assertNull(dav.text(quick))
         assertEquals("# Lasagne al forno\n", dav.text("Pages/Recipes/Lasagne-al-forno.md"))
+    }
+
+    @Test
+    fun `page folders can hold folders`() {
+        dav.putFile("Pages/Recipes/Pasta.md", "# Pasta\n")
+        dav.putFile("Pages/Recipes/Asian/Curry.md", "# Curry\n")
+        dav.putFile("Pages/Recipes/Asian/Curry.assets/p.png", "PNG")
+        dav.putFile("Pages/Recipes/Asian/Thai/Pad Thai.md", "# Pad Thai\n")
+        sync()
+        val sub = runBlocking { repo.createFolder("Pages/Recipes/Asian", "Japanese") }
+        assertEquals("Pages/Recipes/Asian/Japanese", sub)
+
+        val s = structure()
+        assertEquals("only the top folder is a page", listOf("Recipes"), s.pages.map { it.name })
+        assertEquals(
+            "a page folder's notes include its sub-folders'",
+            setOf("Pasta", "Curry", "Pad Thai"), (s.pages.single() as Page.Folder).notes.map { it.title }.toSet(),
+        )
+        assertEquals(listOf("Recipes", "Recipes/Asian", "Recipes/Asian/Japanese", "Recipes/Asian/Thai"), s.pageFolders)
+        assertTrue("assets folders are no folders", s.folders.none { it.contains(".assets") })
+        assertEquals("Pages/Recipes/Asian/Thai", NotesRepository.pageFolderOf("Pages/Recipes/Asian/Thai/Pad Thai.md"))
+
+        sync()
+        assertNotNull("the new sub-folder reaches the server", dav.nodes["Pages/Recipes/Asian/Japanese"])
+        val moved = runBlocking { repo.move("Pages/Recipes/Pasta.md", newParent = "Pages/Recipes/Asian/Japanese") }
+        assertEquals("Pages/Recipes/Asian/Japanese/Pasta.md", moved)
+        sync()
+        assertEquals("# Pasta\n", dav.text(moved))
+        assertNull(dav.text("Pages/Recipes/Pasta.md"))
     }
 
     @Test

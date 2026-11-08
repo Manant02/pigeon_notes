@@ -26,15 +26,21 @@ The app works on one folder on the server (default `/Notes`):
 | Location | Tier | Shown as |
 | --- | --- | --- |
 | `/Notes/*.md` | Quick notes (short-term) | File names are generated: `note-yyMMdd-HHmm_Title.md` |
-| `/Notes/Pages/` | Pages (long-term) | A single `.md` file, or a folder of notes (`Pages/Recipes/…`) |
+| `/Notes/Pages/` | Pages (long-term) | A single `.md` file, or a folder of notes (`Pages/Recipes/…`), which can hold folders of its own (`Pages/Recipes/Asian/…`) |
 | `/Notes/Tags/` | Tagged notes (medium-term) | Directly in `Tags/` = untagged, `Tags/<Tag>/` = tagged with `<Tag>` (one tag per note) |
 
 Every note is titled by its first `# Heading`. Only a note without one falls back to its file name: the
 title part of a `note-…_Title` name, the first line of an older `note-yyMMdd-HHmm.md`, or (when it is
 empty) the moment it was made. A new note starts as `# New Note` with the title selected, so typing
 names it. When an edited note is closed, its file name follows the heading: `note-yyMMdd-HHmm_Title.md`
-for generated names (wherever the note is), just `Title.md` under `Pages/` (spaces become dashes).
-Other names are left alone, and a new note closed without any change is dropped again.
+for generated names, just `Title.md` for a standalone page directly in `Pages/` (spaces become dashes).
+Notes inside a page folder (at any depth) always keep their file name; only a note just created there
+gets one from its heading, once, when it is first closed. Other names are left alone, and a new note
+closed without any change is dropped again.
+
+A page folder opens as a tree, with a breadcrumb of where it is at the top: its folders first (the
+round button on the right opens one in place, tapping it opens it on its own screen, a long-press
+renames or deletes it), then its notes, each with its title, file name and first lines.
 
 Images and other attachments of a note live in `Name.assets/` next to `Name.md`. Other files and
 folders (such as `_archive/`) are synced but not shown, and dot-files and dot-folders (such as

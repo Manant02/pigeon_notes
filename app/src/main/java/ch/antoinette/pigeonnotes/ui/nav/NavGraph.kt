@@ -8,6 +8,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import ch.antoinette.pigeonnotes.domain.NotesRepository
 import ch.antoinette.pigeonnotes.ui.editor.EditorScreen
 import ch.antoinette.pigeonnotes.ui.notes.HomeScreen
 import ch.antoinette.pigeonnotes.ui.notes.ListScope
@@ -43,6 +44,26 @@ object Routes {
     const val ARCHIVE = "\u0000archive"
 }
 
+/**
+ * Goes up to the folder at [path], named in a breadcrumb: back through the screens on the way
+ * when it is one of them (so back doesn't return to the folder just left), else onto a new one.
+ * `Pages` itself has no screen of its own: it is the home screen's pages row.
+ */
+private fun NavHostController.backToFolder(path: String) {
+    if (path == NotesRepository.PAGES_DIR) {
+        popBackStack(Routes.HOME, inclusive = false)
+        return
+    }
+    val target = currentBackStack.value.lastOrNull {
+        it.destination.route == Routes.LIST && it.arguments?.getString("scope") == path
+    }
+    if (target == null) {
+        navigate(Routes.list(ListScope.Folder(path)))
+        return
+    }
+    while (currentBackStackEntry != target && popBackStack()) Unit
+}
+
 @Composable
 fun PigeonNavGraph(nav: NavHostController = rememberNavController(), startPath: String? = null) {
     NavHost(navController = nav, startDestination = Routes.HOME) {
@@ -68,6 +89,8 @@ fun PigeonNavGraph(nav: NavHostController = rememberNavController(), startPath: 
                 startSearching = entry.arguments?.getBoolean("search") == true,
                 onBack = { nav.popBackStack() },
                 onOpenNote = { nav.navigate(Routes.editor(it)) },
+                onOpenFolder = { nav.navigate(Routes.list(ListScope.Folder(it))) },
+                onOpenCrumb = { nav.backToFolder(it) },
                 onOpenSyncSettings = { nav.navigate(Routes.SYNC_SETTINGS) },
                 onOpenAppSettings = { nav.navigate(Routes.APP_SETTINGS) },
             )

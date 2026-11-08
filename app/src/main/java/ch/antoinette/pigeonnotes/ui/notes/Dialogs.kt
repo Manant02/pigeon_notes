@@ -3,6 +3,7 @@ package ch.antoinette.pigeonnotes.ui.notes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -33,7 +34,10 @@ import ch.antoinette.pigeonnotes.domain.NotesRepository
 fun tagFolder(tag: String?): String =
     if (tag.isNullOrEmpty()) NotesRepository.TAGS_DIR else NotesRepository.TAGS_DIR + "/" + tag
 
-/** The folder an add-to-page choice maps to: `Pages/` for a standalone page, `Pages/<folder>` otherwise. */
+/**
+ * The folder an add-to-page choice maps to: `Pages/` for a standalone page, `Pages/<folder>`
+ * otherwise (`<folder>` may be nested, e.g. `Recipes/Asian`).
+ */
 fun pageFolder(folder: String?): String =
     if (folder.isNullOrEmpty()) NotesRepository.PAGES_DIR else NotesRepository.PAGES_DIR + "/" + folder
 
@@ -79,8 +83,9 @@ fun TagPickerDialog(
 }
 
 /**
- * Adds a note to a page: into one of the page folders, or as a standalone page in `Pages/`.
- * [current] is the note's page folder now (`""` = standalone page, null = not under Pages).
+ * Adds a note to a page: into one of the page folders (nested ones shown indented below their
+ * parent), or as a standalone page in `Pages/`. [folders] are relative to `Pages/`, parents
+ * first; [current] is the note's page folder now (`""` = standalone page, null = not under Pages).
  */
 @Composable
 fun PagePickerDialog(
@@ -97,7 +102,7 @@ fun PagePickerDialog(
             title = "New page folder",
             initial = "",
             confirm = "Create",
-            taken = folders,
+            taken = folders.filter { '/' !in it },
             onDismiss = { creating = false },
             onConfirm = { onCreate(it); creating = false },
         )
@@ -110,7 +115,7 @@ fun PagePickerDialog(
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 PickRow("Standalone page", Icons.Outlined.Article, selected = current == "") { onPick("") }
                 for (f in folders) {
-                    PickRow(f, Icons.Outlined.Folder, selected = current == f) { onPick(f) }
+                    PickRow(f.substringAfterLast('/'), Icons.Outlined.Folder, selected = current == f, depth = f.count { it == '/' }) { onPick(f) }
                 }
                 PickRow("New page folder…", Icons.Default.Add, selected = false) { creating = true }
             }
@@ -119,11 +124,12 @@ fun PagePickerDialog(
     )
 }
 
+/** One choice in a picker; [depth] indents a folder nested in the one above it. */
 @Composable
-private fun PickRow(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+private fun PickRow(label: String, icon: ImageVector, selected: Boolean, depth: Int = 0, onClick: () -> Unit) {
     ListItem(
         headlineContent = { Text(label) },
-        leadingContent = { Icon(icon, null) },
+        leadingContent = { Icon(icon, null, Modifier.padding(start = 20.dp * depth)) },
         colors = if (selected) ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         else ListItemDefaults.colors(),
         modifier = Modifier.clickable(enabled = !selected, onClick = onClick),

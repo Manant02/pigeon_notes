@@ -86,25 +86,36 @@ object NoteText {
     /**
      * The file stem the note's H1 asks for, or null when the name already fits (or must stay).
      * A `note-yyMMdd-HHmm` name keeps its stamp and carries the title after an underscore, wherever
-     * the note is. Notes under `Pages/` are named by the title alone. Everything else, conflict
-     * copies and notes without an H1 keep their name. Names that only differ in spaces versus
-     * dashes, punctuation or a ` 2` suffix count as fitting, so desktop-made names aren't touched.
+     * the note is, except inside a page folder. Standalone pages directly in `Pages/` are named by
+     * the title alone. Everything else, conflict copies and notes without an H1 keep their name.
+     * Names that only differ in spaces versus dashes, punctuation or a ` 2` suffix count as
+     * fitting, so desktop-made names aren't touched.
+     *
+     * Notes inside a page folder (`Pages/<Folder>/…`, at any depth) always keep their name: those
+     * folders are curated by hand, often on the desktop, and their file names are part of that.
+     * The one exception is a note the app has just created there ([fresh]), whose placeholder name
+     * (`New-Note.md`) is replaced by its title once, like a standalone page's.
      */
-    fun nameForTitle(path: String, text: String): String? {
+    fun nameForTitle(path: String, text: String, fresh: Boolean = false): String? {
         val heading = heading(text) ?: return null
         val stem = title(path)
         if ("(conflict " in stem) return null
         val slug = slug(heading)
+        val folder = path.substringBeforeLast('/', "")
+        val inPageFolder = isInPageFolder(folder)
+        if (inPageFolder && !fresh) return null
         val stamped = STAMPED.matchEntire(stem)
-        if (stamped != null) {
+        if (stamped != null && !inPageFolder) {
             if (stamped.groupValues[2] == slug) return null
             val base = "note-" + stamped.groupValues[1]
             return if (slug.isEmpty()) base else "${base}_$slug"
         }
-        val folder = path.substringBeforeLast('/', "")
         if (!isPageFolder(folder) || slug.isEmpty()) return null
         return if (slug(stem.replace(UNIQUE_SUFFIX, "")) == slug) null else slug
     }
+
+    /** True for a folder inside `Pages/` (a page folder or one nested in it), not `Pages/` itself. */
+    fun isInPageFolder(folder: String) = folder.startsWith(NotesRepository.PAGES_DIR + "/")
 
     private fun isPageFolder(folder: String) =
         folder == NotesRepository.PAGES_DIR || folder.startsWith(NotesRepository.PAGES_DIR + "/")

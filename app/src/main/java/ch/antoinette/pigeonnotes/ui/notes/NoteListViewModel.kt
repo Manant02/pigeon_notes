@@ -50,37 +50,90 @@ data class NoteListUiState(
     val structure: Structure = Structure(),
     /** Paths picked in selection mode; non-empty means the list is in selection mode. */
     val picked: Set<String> = emptySet(),
+    /**
+     * For a folder: its contents as a tree (sub-folders, expandable in place, then notes), or the
+     * matching notes of the whole folder while searching. Null for "All notes" and the archive,
+     * which show [rows].
+     */
+    val tree: List<TreeItem>? = null,
+    /** For a folder: where it is, from the top (`Pages`) down to itself, as (name, path). */
+    val crumbs: List<Pair<String, String>> = emptyList(),
+    /** Names of the folder's direct sub-folders, to refuse a duplicate when creating one. */
+    val subfolders: List<String> = emptyList(),
 )
 
 class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : ViewModel() {
     private val query = MutableStateFlow("")
+    /** Sub-folders opened in place in the tree. */
+    private val expanded = MutableStateFlow<Set<String>>(emptySet())
     val selection = NoteSelection(graph, viewModelScope)
+
+    /** A folder that could not be deleted, with the files still in it (relative to it). */
+    val notEmpty = MutableStateFlow<Pair<String, List<String>>?>(null)
 
     val state: StateFlow<NoteListUiState> = combine(
         combine(graph.notes.notes, graph.notes.structure, query) { notes, structure, q -> Triple(notes, structure, q) },
         combine(graph.syncEngine.status, graph.notes.pendingCount) { status, pending -> status to pending },
         combine(graph.settings.tileView, graph.settings.pageColors, selection.picked) { tiles, colors, picks -> Triple(tiles, colors, picks) },
-    ) { (allNotes, structure, q), (status, pending), (tiles, colors, picks) ->
-        val rows = allNotes.asSequence()
-            .filter {
-                when (scope) {
-                    ListScope.All -> !it.parent.isArchive()
-                    ListScope.Archive -> it.parent.isArchive()
-                    is ListScope.Folder -> it.parent == scope.path
-                }
-            }
+        expanded,
+    ) { (allNotes, structure, q), (status, pending), (tiles, colors, picks), open ->
+        val folder = (scope as? ListScope.Folder)?.path
+        val rows = if (folder != null) emptyList() else allNotes.asSequence()
+            .filter { if (scope == ListScope.Archive) it.parent.isArchive() else !it.parent.isArchive() }
             .filter { q.isEmpty() || it.title.contains(q, true) || it.preview.contains(q, true) }
             .map { it.toRow() }
             .toList()
+        val tree = folder?.let {
+            if (q.isBlank()) FolderTree.build(it, allNotes, structure.folders, open)
+            else FolderTree.search(it, allNotes, q.trim())
+        }
         val (title, accent) = when (scope) {
             ListScope.All -> "All notes" to CategoryAccent.DEFAULT
             ListScope.Archive -> "Archive" to CategoryAccent.DEFAULT
-            is ListScope.Folder -> scope.path.substringAfterLast('/') to CategoryAccent.of(colors[scope.path])
+            // Sub-folders take the colour of the page folder they are in.
+            is ListScope.Folder -> scope.path.substringAfterLast('/') to CategoryAccent.of(colors[topFolder(scope.path)])
         }
         // Keep only picks that are still on screen, so a synced-away note cannot stay selected.
         val visible = rows.mapTo(HashSet()) { it.path }
-        NoteListUiState(rows, title, accent, q.trim(), status, pending, tiles, structure, picks intersect visible)
+        tree?.forEach { if (it is TreeItem.Note) visible += it.row.path }
+        NoteListUiState(
+            rows, title, accent, q.trim(), status, pending, tiles, structure, picks intersect visible,
+            tree = tree,
+            crumbs = folder?.let(FolderTree::crumbs).orEmpty(),
+            subfolders = folder?.let { f -> structure.folders.filter { it.substringBeforeLast('/', "") == f }.map { it.substringAfterLast('/') } }.orEmpty(),
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NoteListUiState())
+
+    /** `Pages/Recipes/Asian` → `Pages/Recipes`: the folder whose colour is set in the settings. */
+    private fun topFolder(path: String) = path.split('/').take(2).joinToString("/")
+
+    /** Opens or closes a sub-folder in place. */
+    fun toggleExpanded(path: String) {
+        expanded.value = if (path in expanded.value) expanded.value - path else expanded.value + path
+    }
+
+    /** A new folder inside the one on screen. */
+    fun createSubfolder(name: String) {
+        val folder = (scope as? ListScope.Folder)?.path ?: return
+        viewModelScope.launch { graph.notes.createFolder(folder, name) }
+    }
+
+    fun renameFolder(path: String, newName: String) {
+        viewModelScope.launch {
+            val newPath = graph.notes.renameFolder(path, newName)
+            if (newPath != path && path in expanded.value) {
+                expanded.value = expanded.value.mapTo(HashSet()) { if (it == path || it.startsWith("$path/")) newPath + it.removePrefix(path) else it }
+            }
+        }
+    }
+
+    /** Deletes an empty sub-folder; otherwise [notEmpty] says what is still in it. */
+    fun deleteFolder(path: String) {
+        viewModelScope.launch {
+            val result = graph.notes.deleteFolder(path)
+            if (result is NotesRepository.FolderDeletion.NotEmpty) notEmpty.value = path to result.remaining
+        }
+    }
 
     private fun String.isArchive() = this == ARCHIVE_DIR || startsWith("$ARCHIVE_DIR/")
 

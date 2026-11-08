@@ -91,10 +91,24 @@ class NoteTextTest {
     }
 
     @Test
-    fun `notes under Pages are named by the H1 alone`() {
-        assertEquals("Lasagne", NoteText.nameForTitle("Pages/Recipes/New-Note.md", "# Lasagne\n"))
-        assertEquals("Lasagne-al-forno", NoteText.nameForTitle("Pages/Recipes/Lasagne.md", "# Lasagne al forno\n"))
+    fun `standalone pages are named by the H1 alone`() {
         assertEquals("Reading-list", NoteText.nameForTitle("Pages/Books.md", "# Reading list\n"))
+        assertEquals("note-261008-1328_Ideas", NoteText.nameForTitle("Pages/note-261008-1328.md", "# Ideas\n"))
         assertNull("an empty slug keeps the name", NoteText.nameForTitle("Pages/Books.md", "# ?\n"))
+    }
+
+    @Test
+    fun `notes inside page folders keep their name, at any depth`() {
+        assertNull(NoteText.nameForTitle("Pages/Recipes/Lasagne.md", "# Lasagne al forno\n"))
+        assertNull(NoteText.nameForTitle("Pages/Recipes/Asian/Curry.md", "# Green curry\n"))
+        assertNull("not even a stamped name", NoteText.nameForTitle("Pages/Job search/note-261008-1328.md", "# Call Ting\n"))
+        assertNull(NoteText.nameForTitle("Pages/Recipes/New-Note.md", "# Lasagne\n"))
+    }
+
+    @Test
+    fun `a note just created in a page folder is named after its H1 once`() {
+        assertEquals("Lasagne", NoteText.nameForTitle("Pages/Recipes/New-Note.md", "# Lasagne\n", fresh = true))
+        assertEquals("Curry", NoteText.nameForTitle("Pages/Recipes/Asian/New-Note.md", "# Curry\n", fresh = true))
+        assertNull(NoteText.nameForTitle("Pages/Recipes/New-Note.md", "# New Note\n", fresh = true))
     }
 }
