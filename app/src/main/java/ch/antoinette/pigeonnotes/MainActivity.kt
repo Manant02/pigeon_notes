@@ -12,6 +12,7 @@ import androidx.lifecycle.lifecycleScope
 import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.ui.nav.PigeonNavGraph
 import ch.antoinette.pigeonnotes.ui.theme.PigeonTheme
+import ch.antoinette.pigeonnotes.ui.update.UpdatePrompt
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -21,9 +22,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         handleShare(intent)
+        // Not in PigeonApp: background sync starts the process too, and nobody would see a prompt.
+        if (savedInstanceState == null) AppGraph.get(this).updater.checkOnStartup()
         setContent {
             PigeonTheme {
                 PigeonNavGraph(startPath = sharedNotePath)
+                UpdatePrompt()
             }
         }
     }

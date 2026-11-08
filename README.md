@@ -16,6 +16,8 @@ long a note is meant to live.
 - **Three tiers of notes** on one home screen: quick notes, pages and tagged notes (see below).
 - **Share target.** Text shared from other apps becomes a new quick note.
 - **Login Flow v2.** Sign-in happens in the browser and the app only ever receives an app password.
+- **Updates itself.** On startup it looks for a newer build on the repo's Releases page and offers
+  to install it (see below).
 
 Requires Android 14 (API 34) or newer and a Nextcloud server.
 
@@ -75,7 +77,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 GitHub Actions ([build.yml](.github/workflows/build.yml)) runs the unit tests on every push. Every
 push to `main` also builds a release APK and publishes it on the repo's Releases page as
-`pigeon-notes-0.1.<n>.apk`. Open that page on the phone to download and install it.
+`pigeon-notes-0.1.<n>.apk`. The app finds it by itself (see "Updates in the app"); the APK can also
+be downloaded from that page and installed by hand.
 
 Every push to any other branch publishes a **test build** of it as a pre-release ("Test: <branch>"),
 so a change can be tried on the phone before its pull request is merged. Each push replaces the
@@ -89,6 +92,24 @@ Local and CI builds are all signed with the same key (the debug keystore, which 
 keep the app's data. Releases up to `build-20` were signed with a different throwaway key each; an
 app installed from one of them has to be uninstalled once before a newer build installs.
 
+### Updates in the app
+
+Every time the app is opened (a cold start), it asks GitHub's API for the repo's releases and offers
+the newest build that is newer than the one installed: **Install** downloads the APK, checks it
+against GitHub's SHA-256 digest and hands it to Android's installer; **Later** asks again on the next
+start; **Skip** stops offering that build on startup. Settings → Updates has **Check for updates**
+(which also offers a skipped build) and **Test builds**, which includes the test builds of branches.
+
+A release is newer when its version is higher. Test builds share the version of the release they are
+based on, so a test build counts when it is not lower than the installed version and was published
+after the installed build's commit; each build knows its commit (`BuildConfig.GIT_COMMIT`) and each
+release records the commit it was built from. A newer release always wins over a test build of an
+older one.
+
+The first update asks once for "Install unknown apps" permission for Pigeon Notes, and Android
+shows its own confirmation before replacing the app. After an update installed this way, Android may
+let later updates install without asking. Android closes the app while it is replaced.
+
 ## Project structure
 
 ```
@@ -96,7 +117,8 @@ app/src/main/java/ch/antoinette/pigeonnotes/
 ├── data/
 │   ├── local/    FileStore (on-disk mirror), Room database (sync bookkeeping, list index), settings
 │   ├── remote/   WebDAV client, PROPFIND XML parsing, Nextcloud Login Flow v2
-│   └── sync/     SyncEngine, SyncDecision (pure decision table), SyncWorker, connectivity
+│   ├── sync/     SyncEngine, SyncDecision (pure decision table), SyncWorker, connectivity
+│   └── update/   Self-update from the GitHub releases: Releases (pure choice of build), Updater
 ├── domain/       NotesRepository (all note operations), Markdown block parser and inline styler
 └── ui/           Compose screens: home, note lists, editor, settings
 ```
