@@ -49,7 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -124,10 +124,13 @@ fun FolderTreeList(
 
 /**
  * One vertical line per enclosing open folder, running down from the centre of that folder's
- * icon, so the contents of an expanded folder read as hanging from it.
+ * icon, so the contents of an expanded folder read as hanging from it. Drawn over the row, not
+ * behind it: note rows paint their own background, which would hide the line except in the gaps
+ * between rows.
  */
 private fun Modifier.treeGuides(depth: Int, color: Color): Modifier =
-    if (depth == 0) this else drawBehind {
+    if (depth == 0) this else drawWithContent {
+        drawContent()
         val stroke = 2.dp.toPx()
         for (level in 0 until depth) {
             val x = (indentOf(level) + FolderIconSize / 2).toPx()
