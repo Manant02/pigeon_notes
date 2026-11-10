@@ -161,6 +161,13 @@ class MarkdownTest {
     }
 
     @Test
+    fun `code block has no inline style`() {
+        // The box draws the background; a span background would cover the selection highlight.
+        val a = InlineStyler.analyze("```\nval a = 1\n```", BlockKind.CODE)
+        assertEquals(emptyList<Any>(), a.styles)
+    }
+
+    @Test
     fun `inline image and code span`() {
         val a = InlineStyler.analyze("see ![alt text](../img/x.png) and `code`", BlockKind.PARAGRAPH)
         val p = InlineStyler.project(a)

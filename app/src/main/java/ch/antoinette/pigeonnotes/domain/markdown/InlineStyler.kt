@@ -93,7 +93,9 @@ object InlineStyler {
         val markers = ArrayList<Marker>()
         val links = ArrayList<LinkRange>()
         if (kind == BlockKind.CODE || kind == BlockKind.TABLE || kind == BlockKind.HTML || kind == BlockKind.MATH || kind == BlockKind.FRONTMATTER) {
-            styles += StyleRange(0, source.length, InlineStyle.CODE)
+            // No CODE style over the whole block: the block's base style is already monospace and its
+            // box draws the background. A span background would be painted over the selection
+            // highlight, hiding which text is selected.
             if (kind == BlockKind.CODE) fenceMarkers(source, markers)
             return Analysis(source, styles, markers, links)
         }

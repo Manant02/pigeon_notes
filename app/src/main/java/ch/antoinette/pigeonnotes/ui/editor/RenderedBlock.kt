@@ -84,7 +84,7 @@ fun RenderedBlock(
             Modifier.pointerInput(Unit) { detectTapGestures { onActivate(block.source.length) } },
         )
 
-        BlockKind.CODE -> Box(
+        BlockKind.CODE, BlockKind.TABLE, BlockKind.HTML -> Box(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))

@@ -25,12 +25,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import ch.antoinette.pigeonnotes.domain.markdown.Analysis
@@ -134,10 +137,22 @@ class MarkdownOutputTransformation(
             if (m.replacement.isEmpty()) delete(m.start, m.end) else replace(m.start, m.end, m.replacement)
         }
         val base = blockTextStyle(kind, level, palette)
+        // The buffer moves the selection along with the edits above, so this is in output coordinates.
+        val shownStart = selection.min.coerceIn(0, length)
+        val shownEnd = selection.max.coerceIn(0, length)
         for (s in projection.styles) {
             val style = palette.spanStyle(s, base) ?: continue
             val a = s.start.coerceIn(0, length); val b = s.end.coerceIn(0, length)
-            if (b > a) addStyle(style, a, b)
+            if (b <= a) continue
+            if (!style.background.isSpecified || shownEnd <= shownStart) {
+                addStyle(style, a, b); continue
+            }
+            // Span backgrounds (inline code, ==highlight==) are painted over the selection highlight,
+            // so leave the selected part without one.
+            addStyle(style.copy(background = Color.Unspecified), a, b)
+            val bg = SpanStyle(background = style.background)
+            if (a < shownStart) addStyle(bg, a, minOf(b, shownStart))
+            if (b > shownEnd) addStyle(bg, maxOf(a, shownEnd), b)
         }
     }
 }
