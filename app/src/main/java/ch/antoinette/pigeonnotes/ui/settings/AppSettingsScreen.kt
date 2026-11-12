@@ -11,8 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.GridView
-import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Folder
@@ -80,7 +78,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
-    val tileView = graph.settings.tileView
     val pageRows = graph.settings.pageRows
     val testBuilds = graph.settings.testBuilds
     val update = graph.updater.state
@@ -103,10 +100,6 @@ class AppSettingsViewModel(private val graph: AppGraph) : ViewModel() {
 
     /** Set when a folder could not be deleted because files are still in it. */
     val notEmpty = MutableStateFlow<Pair<String, List<String>>?>(null)
-
-    fun setTileView(enabled: Boolean) {
-        viewModelScope.launch { graph.settings.setTileView(enabled) }
-    }
 
     fun setPageRows(rows: Int) {
         viewModelScope.launch { graph.settings.setPageRows(rows) }
@@ -155,7 +148,6 @@ fun AppSettingsScreen(
     onBack: () -> Unit,
     vm: AppSettingsViewModel = graphViewModel { AppSettingsViewModel(it) },
 ) {
-    val tiles by vm.tileView.collectAsStateWithLifecycle(false)
     val pageRows by vm.pageRows.collectAsStateWithLifecycle(Settings.DEFAULT_PAGE_ROWS)
     val pages by vm.pages.collectAsStateWithLifecycle(emptyList())
     val tags by vm.tags.collectAsStateWithLifecycle(emptyList())
@@ -184,28 +176,6 @@ fun AppSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SectionTitle("Appearance")
-            ListItem(
-                headlineContent = { Text("Note layout") },
-                supportingContent = { Text(if (tiles) "Tiles, like Keep" else "One note per row") },
-                trailingContent = {
-                    SingleChoiceSegmentedButtonRow {
-                        SegmentedButton(
-                            selected = !tiles,
-                            onClick = { vm.setTileView(false) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            icon = {},
-                            label = { Icon(Icons.Outlined.ViewList, "List") },
-                        )
-                        SegmentedButton(
-                            selected = tiles,
-                            onClick = { vm.setTileView(true) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            icon = {},
-                            label = { Icon(Icons.Outlined.GridView, "Tiles") },
-                        )
-                    }
-                },
-            )
             ListItem(
                 headlineContent = { Text("Page rows on home") },
                 supportingContent = { Text(if (pageRows == 1) "One row of page tiles" else "$pageRows rows of page tiles") },

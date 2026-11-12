@@ -46,7 +46,6 @@ data class NoteListUiState(
     val query: String = "",
     val status: SyncStatus = SyncStatus.Idle,
     val pendingCount: Int = 0,
-    val tileView: Boolean = false,
     val structure: Structure = Structure(),
     /** Paths picked in selection mode; non-empty means the list is in selection mode. */
     val picked: Set<String> = emptySet(),
@@ -74,9 +73,9 @@ class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : Vie
     val state: StateFlow<NoteListUiState> = combine(
         combine(graph.notes.notes, graph.notes.structure, query) { notes, structure, q -> Triple(notes, structure, q) },
         combine(graph.syncEngine.status, graph.notes.pendingCount) { status, pending -> status to pending },
-        combine(graph.settings.tileView, graph.settings.pageColors, selection.picked) { tiles, colors, picks -> Triple(tiles, colors, picks) },
+        combine(graph.settings.pageColors, selection.picked) { colors, picks -> colors to picks },
         expanded,
-    ) { (allNotes, structure, q), (status, pending), (tiles, colors, picks), open ->
+    ) { (allNotes, structure, q), (status, pending), (colors, picks), open ->
         val folder = (scope as? ListScope.Folder)?.path
         val rows = if (folder != null) emptyList() else allNotes.asSequence()
             .filter { if (scope == ListScope.Archive) it.parent.isArchive() else !it.parent.isArchive() }
@@ -97,7 +96,7 @@ class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : Vie
         val visible = rows.mapTo(HashSet()) { it.path }
         tree?.forEach { if (it is TreeItem.Note) visible += it.row.path }
         NoteListUiState(
-            rows, title, accent, q.trim(), status, pending, tiles, structure, picks intersect visible,
+            rows, title, accent, q.trim(), status, pending, structure, picks intersect visible,
             tree = tree,
             crumbs = folder?.let(FolderTree::crumbs).orEmpty(),
             subfolders = folder?.let { f -> structure.folders.filter { it.substringBeforeLast('/', "") == f }.map { it.substringAfterLast('/') } }.orEmpty(),

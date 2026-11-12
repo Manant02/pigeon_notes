@@ -40,7 +40,6 @@ class Settings(private val context: Context) : AccountSource {
         val appPassword = stringPreferencesKey("app_password")
         val notesRoot = stringPreferencesKey("notes_root")
         val lastSync = longPreferencesKey("last_sync")
-        val tileView = booleanPreferencesKey("tile_view")
         val pageRows = intPreferencesKey("page_rows")
         val pageOrder = stringPreferencesKey("page_order")
         val pageColors = stringPreferencesKey("page_colors")
@@ -60,13 +59,6 @@ class Settings(private val context: Context) : AccountSource {
 
     suspend fun setSkippedUpdate(commit: String) {
         context.dataStore.edit { it[Keys.skippedUpdate] = commit }
-    }
-
-    /** Show note lists as Keep-style tiles instead of rows. */
-    val tileView: Flow<Boolean> = context.dataStore.data.map { it[Keys.tileView] ?: false }
-
-    suspend fun setTileView(enabled: Boolean) {
-        context.dataStore.edit { it[Keys.tileView] = enabled }
     }
 
     /** How many rows the horizontally scrolling page tiles on the home screen use. */
