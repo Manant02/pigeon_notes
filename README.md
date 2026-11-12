@@ -14,6 +14,9 @@ long a note is meant to live.
   mode. Tap the title at the top to rename the note's file. The Markdown is kept verbatim: only the text you edit changes, so
   notes stay as written for Obsidian, Typora and Nextcloud Notes on the desktop.
 - **Three tiers of notes** on one home screen: quick notes, pages and tagged notes (see below).
+- **Full-text search** over every note, the archive included: every word has to appear somewhere
+  in the note (case and accents ignored), and each result shows where the note lives and the
+  words found. The archive is grouped by month; swipe a note right to restore it.
 - **Share target.** Text shared from other apps becomes a new quick note.
 - **Login Flow v2.** Sign-in happens in the browser and the app only ever receives an app password.
 - **Updates itself.** On startup it looks for a newer build on the repo's Releases page and offers

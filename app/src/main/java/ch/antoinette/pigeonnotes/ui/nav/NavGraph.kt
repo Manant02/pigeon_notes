@@ -13,6 +13,7 @@ import ch.antoinette.pigeonnotes.ui.editor.EditorScreen
 import ch.antoinette.pigeonnotes.ui.notes.HomeScreen
 import ch.antoinette.pigeonnotes.ui.notes.ListScope
 import ch.antoinette.pigeonnotes.ui.notes.NoteListScreen
+import ch.antoinette.pigeonnotes.ui.notes.SearchScreen
 import ch.antoinette.pigeonnotes.ui.settings.AppSettingsScreen
 import ch.antoinette.pigeonnotes.ui.settings.SettingsScreen
 
@@ -84,9 +85,13 @@ fun PigeonNavGraph(nav: NavHostController = rememberNavController(), startPath: 
                 navArgument("search") { type = NavType.BoolType; defaultValue = false },
             ),
         ) { entry ->
+            val scope = Routes.scopeOf(entry.arguments?.getString("scope").orEmpty())
+            if (scope == ListScope.All) {
+                SearchScreen(onBack = { nav.popBackStack() }, onOpenNote = { nav.navigate(Routes.editor(it)) })
+                return@composable
+            }
             NoteListScreen(
-                scope = Routes.scopeOf(entry.arguments?.getString("scope").orEmpty()),
-                startSearching = entry.arguments?.getBoolean("search") == true,
+                scope = scope,
                 onBack = { nav.popBackStack() },
                 onOpenNote = { nav.navigate(Routes.editor(it)) },
                 onOpenFolder = { nav.navigate(Routes.list(ListScope.Folder(it))) },

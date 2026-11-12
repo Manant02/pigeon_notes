@@ -9,10 +9,19 @@ import ch.antoinette.pigeonnotes.data.sync.SyncStatus
 import ch.antoinette.pigeonnotes.domain.NoteText
 import ch.antoinette.pigeonnotes.domain.NotesRepository
 import ch.antoinette.pigeonnotes.domain.Structure
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -59,10 +68,21 @@ data class NoteListUiState(
     val crumbs: List<Pair<String, String>> = emptyList(),
     /** Names of the folder's direct sub-folders, to refuse a duplicate when creating one. */
     val subfolders: List<String> = emptyList(),
+    /**
+     * Outside folders, while a search is typed: the notes whose text matches it (full text, see
+     * [NoteSearch]), shown instead of [rows]. Null when not searching, and in folders.
+     */
+    val hits: List<SearchHit>? = null,
+    /** False until the notes have been read, so "nothing here" isn't flashed before they are. */
+    val loaded: Boolean = false,
 )
 
+@OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : ViewModel() {
     private val query = MutableStateFlow("")
+    /** The search as typed, for the search field (the list follows it a moment later). */
+    val typedQuery: StateFlow<String> = query.asStateFlow()
+    private val texts = NoteTextCache(graph.notes::read)
     /** Sub-folders opened in place in the tree. */
     private val expanded = MutableStateFlow<Set<String>>(emptySet())
     val selection = NoteSelection(graph, viewModelScope)
@@ -70,18 +90,35 @@ class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : Vie
     /** A folder that could not be deleted, with the files still in it (relative to it). */
     val notEmpty = MutableStateFlow<Pair<String, List<String>>?>(null)
 
+    /**
+     * Full-text matches in the archive (or in every note, archive included), recomputed a moment
+     * after typing stops.
+     * Folders search their index instead ([FolderTree.search]), so they get none.
+     */
+    private val hits: Flow<List<SearchHit>?> =
+        if (scope is ListScope.Folder) flowOf(null)
+        else combine(graph.notes.notes, query.debounce { if (it.isBlank()) 0L else SEARCH_DELAY_MS }) { notes, q -> notes to q }
+            .mapLatest { (notes, q) ->
+                if (q.isBlank()) return@mapLatest null
+                // Searching every note includes the archive (shown apart); the archive searches only itself.
+                val inScope = if (scope == ListScope.All) notes else notes.filter { inScope(it) }
+                val text = texts.texts(inScope)
+                NoteSearch.search(inScope, q) { text[it.path].orEmpty() }
+            }
+            .flowOn(Dispatchers.IO)
+
     val state: StateFlow<NoteListUiState> = combine(
-        combine(graph.notes.notes, graph.notes.structure, query) { notes, structure, q -> Triple(notes, structure, q) },
+        combine(graph.notes.notes, graph.notes.structure, query, hits) { notes, structure, q, hits -> Search(notes, structure, q, hits) },
         combine(graph.syncEngine.status, graph.notes.pendingCount) { status, pending -> status to pending },
         combine(graph.settings.pageColors, selection.picked) { colors, picks -> colors to picks },
         expanded,
-    ) { (allNotes, structure, q), (status, pending), (colors, picks), open ->
+    ) { (allNotes, structure, q, found), (status, pending), (colors, picks), open ->
         val folder = (scope as? ListScope.Folder)?.path
         val rows = if (folder != null) emptyList() else allNotes.asSequence()
-            .filter { if (scope == ListScope.Archive) it.parent.isArchive() else !it.parent.isArchive() }
-            .filter { q.isEmpty() || it.title.contains(q, true) || it.preview.contains(q, true) }
+            .filter { inScope(it) }
             .map { it.toRow() }
             .toList()
+        val hits = found.takeIf { q.isNotBlank() }
         val tree = folder?.let {
             if (q.isBlank()) FolderTree.build(it, allNotes, structure.folders, open)
             else FolderTree.search(it, allNotes, q.trim())
@@ -93,15 +130,21 @@ class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : Vie
             is ListScope.Folder -> scope.path.substringAfterLast('/') to CategoryAccent.of(colors[topFolder(scope.path)])
         }
         // Keep only picks that are still on screen, so a synced-away note cannot stay selected.
-        val visible = rows.mapTo(HashSet()) { it.path }
+        val visible = (hits?.map { it.row } ?: rows).mapTo(HashSet()) { it.path }
         tree?.forEach { if (it is TreeItem.Note) visible += it.row.path }
         NoteListUiState(
             rows, title, accent, q.trim(), status, pending, structure, picks intersect visible,
             tree = tree,
             crumbs = folder?.let(FolderTree::crumbs).orEmpty(),
             subfolders = folder?.let { f -> structure.folders.filter { it.substringBeforeLast('/', "") == f }.map { it.substringAfterLast('/') } }.orEmpty(),
+            hits = hits,
+            loaded = true,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NoteListUiState())
+
+    private data class Search(val notes: List<SyncEntry>, val structure: Structure, val query: String, val hits: List<SearchHit>?)
+
+    private fun inScope(note: SyncEntry) = if (scope == ListScope.Archive) note.parent.isArchive() else !note.parent.isArchive()
 
     /** `Pages/Recipes/Asian` → `Pages/Recipes`: the folder whose colour is set in the settings. */
     private fun topFolder(path: String) = path.split('/').take(2).joinToString("/")
@@ -148,5 +191,20 @@ class NoteListViewModel(private val graph: AppGraph, val scope: ListScope) : Vie
 
     fun delete(path: String) {
         viewModelScope.launch { graph.notes.delete(path) }
+    }
+
+    /** Takes a note out of the archive into the quick notes; [onDone] gets its new path (for undo). */
+    fun restore(path: String, onDone: (String) -> Unit = {}) {
+        viewModelScope.launch { onDone(graph.notes.move(path, newParent = "")) }
+    }
+
+    /** Puts a note (back) into the archive. */
+    fun archive(path: String) {
+        viewModelScope.launch { graph.notes.move(path, newParent = ARCHIVE_DIR) }
+    }
+
+    companion object {
+        /** How long typing has to pause before the full-text search runs. */
+        const val SEARCH_DELAY_MS = 150L
     }
 }
