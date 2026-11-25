@@ -66,6 +66,8 @@ class MarkdownPalette(
         InlineStyle.SUBSCRIPT -> SpanStyle(baselineShift = BaselineShift.Subscript, fontSize = style.fontSize * 0.75f)
         InlineStyle.SUPERSCRIPT -> SpanStyle(baselineShift = BaselineShift.Superscript, fontSize = style.fontSize * 0.75f)
         InlineStyle.HIGHLIGHT -> SpanStyle(background = highlight, color = onHighlight)
+        InlineStyle.UNDERLINE -> SpanStyle(textDecoration = TextDecoration.Underline)
+        InlineStyle.SMALL -> SpanStyle(fontSize = style.fontSize * 0.85f)
         InlineStyle.HEADING -> null // block-level: applied through the base TextStyle
     }
 

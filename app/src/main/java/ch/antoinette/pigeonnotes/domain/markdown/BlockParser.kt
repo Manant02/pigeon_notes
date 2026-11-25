@@ -11,6 +11,13 @@ enum class BlockKind {
     PARAGRAPH, HEADING, LIST, CODE, QUOTE, TABLE, HR, HTML, FRONTMATTER, IMAGE, MATH, ALERT,
 
     /**
+     * An HTML block simple enough to be shown as text (`<div>`, `<details>`, `<b>`…): rendered like a
+     * paragraph with its tags hidden, but edited like [HTML] (Enter adds a line, no joining). Others,
+     * such as `<table>` or `<pre>`, are [HTML] and show their source.
+     */
+    HTML_TEXT,
+
+    /**
      * A visible blank line: one that is not the [Block.separator] right after a block. Blank lines
      * before the first block are all visible. Typing into one turns it into a block.
      */
@@ -278,7 +285,8 @@ object BlockParser {
         MarkdownElementTypes.UNORDERED_LIST, MarkdownElementTypes.ORDERED_LIST -> BlockKind.LIST
         MarkdownElementTypes.CODE_FENCE, MarkdownElementTypes.CODE_BLOCK -> BlockKind.CODE
         MarkdownElementTypes.BLOCK_QUOTE -> BlockKind.QUOTE
-        MarkdownElementTypes.HTML_BLOCK -> BlockKind.HTML
+        MarkdownElementTypes.HTML_BLOCK ->
+            if (HtmlInline.rendersAsText(doc.substring(node.startOffset, node.endOffset))) BlockKind.HTML_TEXT else BlockKind.HTML
         MarkdownElementTypes.LINK_DEFINITION -> BlockKind.PARAGRAPH
         MarkdownTokenTypes.HORIZONTAL_RULE -> BlockKind.HR
         GFMElementTypes.TABLE -> BlockKind.TABLE

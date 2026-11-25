@@ -8,7 +8,7 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 
 /** Abstract styling instructions; the UI maps them to theme-aware SpanStyles. Keeps this layer testable. */
-enum class InlineStyle { BOLD, ITALIC, CODE, STRIKE, LINK, IMAGE_ALT, MATH, HEADING, QUOTE, BULLET, DIM, SUBSCRIPT, SUPERSCRIPT, HIGHLIGHT }
+enum class InlineStyle { BOLD, ITALIC, CODE, STRIKE, LINK, IMAGE_ALT, MATH, HEADING, QUOTE, BULLET, DIM, SUBSCRIPT, SUPERSCRIPT, HIGHLIGHT, UNDERLINE, SMALL }
 
 data class StyleRange(val start: Int, val end: Int, val style: InlineStyle, val level: Int = 0)
 
@@ -102,6 +102,7 @@ object InlineStyler {
         val root = BlockParser.parseTree(source)
         val w = Walker(source, styles, markers, links)
         w.walk(root)
+        HtmlInline.apply(source, w.htmlTags, styles, markers, links)
         scanExtras(source, w.protectedSpans, styles, markers)
         markers.sortBy { it.start }
         return Analysis(source, styles, markers, links, w.math, w.listLines, w.checkboxes)
@@ -216,11 +217,22 @@ object InlineStyler {
         /** Ranges where `~`, `^` and `=` are literal: code, math, URLs, raw HTML. */
         val protectedSpans = ArrayList<IntRange>()
 
+        /** Raw HTML tags in source order, grouped by the element they sit in (only those pair up). */
+        val htmlTags = ArrayList<HtmlInline.Tag>()
+        private val groups = java.util.IdentityHashMap<ASTNode, Int>()
+        private val path = ArrayList<ASTNode>()
+
         private fun protect(node: ASTNode) {
             protectedSpans += node.startOffset until node.endOffset
         }
 
         fun walk(node: ASTNode) {
+            path += node
+            visit(node)
+            path.removeAt(path.lastIndex)
+        }
+
+        private fun visit(node: ASTNode) {
             val t = node.type
             when {
                 t == MarkdownElementTypes.ATX_1 || t == MarkdownElementTypes.ATX_2 || t == MarkdownElementTypes.ATX_3 ||
@@ -334,7 +346,24 @@ object InlineStyler {
 
                 t == MarkdownTokenTypes.HTML_TAG -> {
                     protect(node)
-                    styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.DIM)
+                    val parent = path.getOrNull(path.size - 2) ?: node
+                    val group = groups.getOrPut(parent) { groups.size + 1 }
+                    htmlTags += HtmlInline.scan(src, node.startOffset, node.endOffset, group)
+                        .ifEmpty { listOf(HtmlInline.Tag(node.startOffset, node.endOffset, group, "", false, true, "")) }
+                }
+
+                // A whole HTML block, read as text when it is simple enough (see BlockParser).
+                t == MarkdownElementTypes.HTML_BLOCK -> {
+                    val text = src.substring(node.startOffset, node.endOffset)
+                    if (HtmlInline.rendersAsText(text)) {
+                        val group = groups.getOrPut(node) { groups.size + 1 }
+                        val tags = HtmlInline.scan(src, node.startOffset, node.endOffset, group)
+                        tags.forEach { protectedSpans += it.start until it.end }
+                        htmlTags += tags
+                    } else {
+                        protect(node)
+                        styles += StyleRange(node.startOffset, node.endOffset, InlineStyle.DIM)
+                    }
                 }
 
                 t == MarkdownElementTypes.CODE_BLOCK || t == MarkdownElementTypes.CODE_FENCE -> {

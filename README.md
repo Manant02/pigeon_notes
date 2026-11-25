@@ -9,7 +9,8 @@ long a note is meant to live.
   pushed whenever the server is reachable; WorkManager runs a background sync every 15 minutes.
 - **Block-hybrid Markdown editor.** Native Jetpack Compose, no WebView: the note is shown
   rendered, and only the block you tap turns into raw Markdown for editing. Supports headings,
-  lists, checkboxes, code, links, images, strikethrough and LaTeX (`$…$`, `$$…$$`), plus
+  lists, checkboxes, code, links, images, strikethrough, LaTeX (`$…$`, `$$…$$`) and inline HTML
+  (`<u>`, `<b>`, `<sub>`, `<mark>`, `<br>`, `<a href>`, `<details>`…, tags hidden like Markdown syntax), plus
   undo/redo (in the formatting bar), a table of contents that jumps to a heading, and a source
   mode. Tap the title at the top to rename the note's file. The Markdown is kept verbatim: only the text you edit changes, so
   notes stay as written for Obsidian, Typora and Nextcloud Notes on the desktop.
